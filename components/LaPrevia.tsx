@@ -12,6 +12,7 @@ import { geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature, merge, neighbors } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import type { FeatureCollection, Geometry } from "geojson";
+import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import mundoTopo from "world-atlas/countries-110m.json";
 import eeuuTopo from "us-atlas/states-10m.json";
 import {
@@ -105,7 +106,7 @@ interface Plan {
   creado: string;
 }
 
-type Vista = "mapa" | "partidos" | "planes";
+type Vista = "mapa" | "partidos" | "planes" | "chat";
 type Fuente = "oficial" | "envivo" | "demo";
 
 interface Aviso {
@@ -1780,7 +1781,9 @@ function DetallePlan({
   yo,
   permisoAvisos,
   onPedirNombre,
-  onActualizar,
+  onVoy,
+  onMensaje,
+  onRecordatorios,
   onCompartir,
   onPedirPermiso,
   onBorrar,
@@ -1792,7 +1795,9 @@ function DetallePlan({
   yo: string;
   permisoAvisos: NotificationPermission | "no-soportado";
   onPedirNombre: (luego: (nombre: string) => void) => void;
-  onActualizar: (pl: Plan) => void;
+  onVoy: (pl: Plan, nombre: string) => void;
+  onMensaje: (pl: Plan, nombre: string, texto: string) => void;
+  onRecordatorios: (pl: Plan, r: Plan["recordatorios"]) => void;
   onCompartir: (pl: Plan) => void;
   onPedirPermiso: () => void;
   onBorrar: (pl: Plan) => void;
@@ -1811,20 +1816,14 @@ function DetallePlan({
     fin.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [plan.chat.length]);
 
-  const alternarVoy = () =>
-    onPedirNombre((nombre) =>
-      onActualizar({
-        ...plan,
-        confirmados: plan.confirmados.includes(nombre) ? plan.confirmados.filter((n) => n !== nombre) : [...plan.confirmados, nombre],
-      }),
-    );
+  const alternarVoy = () => onPedirNombre((nombre) => onVoy(plan, nombre));
 
   const enviar = (e: React.FormEvent) => {
     e.preventDefault();
     const t = texto.trim();
     if (!t) return;
     onPedirNombre((nombre) => {
-      onActualizar({ ...plan, chat: [...plan.chat, { id: uid(), autor: nombre, texto: t, hora: new Date().toISOString() }] });
+      onMensaje(plan, nombre, t);
       setTexto("");
     });
   };
@@ -1902,7 +1901,7 @@ function DetallePlan({
             return (
               <button
                 key={k}
-                onClick={() => onActualizar({ ...plan, recordatorios: { ...plan.recordatorios, [k]: !on } })}
+                onClick={() => onRecordatorios(plan, { ...plan.recordatorios, [k]: !on })}
                 className="flex w-full items-center justify-between py-1.5 text-sm"
                 role="switch"
                 aria-checked={on}
@@ -2008,7 +2007,9 @@ function DetallePlan({
             </button>
           )}
         </div>
-        <p className="text-center text-[11px] text-white/35">Los pines, confirmados y el chat se guardan en este dispositivo.</p>
+        <p className="text-center text-[11px] text-white/35">
+          {NUBE ? "Los pines, confirmados y el chat se ven en tiempo real en todos los dispositivos." : "Los pines, confirmados y el chat se guardan en este dispositivo."}
+        </p>
       </div>
     </Hoja>
   );
@@ -2153,6 +2154,139 @@ function ModalCompartir({ mensaje, url, onCerrar, onCopiado }: { mensaje: string
   );
 }
 
+/* ─────────────────────────── Nube (Supabase) ─────────────────────────── */
+
+// Con estas dos variables en Vercel, pines, confirmados y chats se comparten en tiempo real entre todos los dispositivos.
+// Sin ellas la app funciona igual, pero todo se guarda solo en el navegador.
+const URL_NUBE = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const LLAVE_NUBE = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+const NUBE: SupabaseClient | null = URL_NUBE && LLAVE_NUBE ? createClient(URL_NUBE, LLAVE_NUBE) : null;
+const SALA_GENERAL = "general";
+
+interface FilaPlan {
+  id: string;
+  partido_id: string;
+  snap: Plan["snap"];
+  lat: number;
+  lng: number;
+  pais: string;
+  estado: string;
+  ciudad: string;
+  lugar: string;
+  tipo: TipoLugar;
+  hashtag: string;
+  anfitrion: string;
+  creado: string;
+}
+interface FilaMensaje {
+  id: string;
+  sala: string;
+  autor: string;
+  texto: string;
+  hora: string;
+}
+
+type Recordatorios = Record<string, Plan["recordatorios"]>;
+
+/** Lee todo lo compartido y lo arma como planes con sus confirmados y su chat. */
+async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[]; general: Mensaje[] } | null> {
+  if (!NUBE) return null;
+  const [pl, co, me] = await Promise.all([
+    NUBE.from("planes").select("*").order("creado"),
+    NUBE.from("confirmados").select("plan_id, nombre, creado").order("creado"),
+    NUBE.from("mensajes").select("*").order("hora", { ascending: false }).limit(1500),
+  ]);
+  if (pl.error || co.error || me.error) throw pl.error ?? co.error ?? me.error;
+  const mensajes = ((me.data ?? []) as FilaMensaje[]).reverse();
+  const aMensaje = (m: FilaMensaje): Mensaje => ({ id: m.id, autor: m.autor, texto: m.texto, hora: m.hora });
+  const planes = ((pl.data ?? []) as FilaPlan[]).map((f) => ({
+    id: f.id,
+    partidoId: f.partido_id,
+    snap: f.snap,
+    lat: f.lat,
+    lng: f.lng,
+    pais: f.pais,
+    estado: f.estado,
+    ciudad: f.ciudad,
+    lugar: f.lugar,
+    tipo: f.tipo,
+    hashtag: f.hashtag,
+    anfitrion: f.anfitrion,
+    confirmados: ((co.data ?? []) as { plan_id: string; nombre: string }[]).filter((c) => c.plan_id === f.id).map((c) => c.nombre),
+    chat: mensajes.filter((m) => m.sala === f.id).map(aMensaje),
+    recordatorios: recordatorios[f.id] ?? { dia: true, hora: true },
+    creado: f.creado,
+  }));
+  return { planes, general: mensajes.filter((m) => m.sala === SALA_GENERAL).map(aMensaje) };
+}
+
+/* ─────────────────────────── Chat en vivo ─────────────────────────── */
+
+function ChatEnVivo({
+  mensajes,
+  yo,
+  enLinea,
+  onEnviar,
+}: {
+  mensajes: Mensaje[];
+  yo: string;
+  enLinea: string[];
+  onEnviar: (texto: string) => void;
+}) {
+  const [texto, setTexto] = useState("");
+  const fin = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    fin.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [mensajes.length]);
+  const enviar = (e: React.FormEvent) => {
+    e.preventDefault();
+    const t = texto.trim();
+    if (!t) return;
+    onEnviar(t);
+    setTexto("");
+  };
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b border-white/10 px-4 pb-3 pt-4">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="font-display text-2xl font-extrabold uppercase tracking-wide">Chat en vivo</h2>
+            <p className="text-xs text-white/50">{NUBE ? "Todos los que tienen la app abierta lo ven al momento." : "Modo local: los mensajes se quedan en este dispositivo."}</p>
+          </div>
+          {NUBE && (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-neon/10 px-2.5 py-1 text-xs font-bold text-neon">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-neon" /> {enLinea.length} en línea
+            </span>
+          )}
+        </div>
+        {NUBE && enLinea.length > 0 && <p className="mt-2 truncate text-xs text-white/45">Conectados: {enLinea.join(", ")}</p>}
+      </div>
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3">
+        {mensajes.length === 0 && <p className="py-10 text-center text-sm text-white/45">Nadie ha escrito todavía. Di dónde vas a ver el partido.</p>}
+        {mensajes.map((m) => {
+          const mio = m.autor === yo;
+          return (
+            <motion.div key={m.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className={`flex ${mio ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${mio ? "rounded-br-md bg-neon text-noche" : "rounded-bl-md bg-white/[.08]"}`}>
+                {!mio && <p className="text-[11px] font-extrabold text-oro">{m.autor}</p>}
+                <p className="whitespace-pre-wrap break-words font-medium">{m.texto}</p>
+                <p className={`mt-0.5 text-right text-[10px] ${mio ? "text-noche/60" : "text-white/40"}`}>{fmtHora(m.hora)}</p>
+              </div>
+            </motion.div>
+          );
+        })}
+        <div ref={fin} />
+      </div>
+      <form onSubmit={enviar} className="flex gap-2 border-t border-white/10 p-3 pb-24 lg:pb-3">
+        <input id="chat-general" value={texto} onChange={(e) => setTexto(e.target.value)} maxLength={500} placeholder="Escribe a todos…" className={`${claseInput} py-2`} aria-label="Mensaje al chat en vivo" />
+        <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-neon text-noche transition active:scale-90 disabled:opacity-40" disabled={!texto.trim()} aria-label="Enviar al chat en vivo">
+          <Send className="h-4 w-4" />
+        </button>
+      </form>
+    </div>
+  );
+}
+
 /* ─────────────────────────── App principal ─────────────────────────── */
 
 export default function LaPrevia() {
@@ -2178,7 +2312,12 @@ export default function LaPrevia() {
   const [pedirNombre, setPedirNombre] = useState<((n: string) => void) | null>(null);
   const [avisos, setAvisos] = useState<Aviso[]>([]);
   const [permiso, setPermiso] = useState<NotificationPermission | "no-soportado">("default");
+  const [general, setGeneral] = useState<Mensaje[]>([]);
+  const [enLinea, setEnLinea] = useState<string[]>([]);
   const listo = useRef(false);
+  // En modo nube: recordatorios y llaves para borrar viven solo en este dispositivo.
+  const recordatoriosRef = useRef<Recordatorios>({});
+  const canal = useRef<RealtimeChannel | null>(null);
 
   const avisar = useCallback((a: Omit<Aviso, "id">) => {
     const id = uid();
@@ -2198,7 +2337,9 @@ export default function LaPrevia() {
       setDemo(true);
     }
     // Solo los planes que alguien agregó de verdad (se descartan los de muestra de versiones anteriores).
-    let iniciales = leer<Plan[]>("previa:planes", []).filter((p) => !p.id.startsWith("demo-"));
+    let iniciales = NUBE ? [] : leer<Plan[]>("previa:planes", []).filter((p) => !p.id.startsWith("demo-"));
+    recordatoriosRef.current = leer<Recordatorios>("previa:recordatorios", {});
+    if (!NUBE) setGeneral(leer<Mensaje[]>("previa:general", []));
     setYo(leer<string>("previa:yo", ""));
     setPermiso(typeof Notification === "undefined" ? "no-soportado" : Notification.permission);
 
@@ -2207,8 +2348,9 @@ export default function LaPrevia() {
       try {
         const pl = JSON.parse(deBase64(compartido)) as Plan;
         if (pl?.id && typeof pl.lat === "number") {
+          // Con la nube el plan ya está compartido; sin ella se agrega desde el enlace.
           const ya = iniciales.find((x) => x.id === pl.id);
-          if (!ya) iniciales = [...iniciales, { ...pl, chat: pl.chat ?? [] }];
+          if (!ya && !NUBE) iniciales = [...iniciales, { ...pl, chat: pl.chat ?? [] }];
           setAbierto(pl.id);
           setFoco({ lat: pl.lat, lng: pl.lng, zoom: 5, n: Date.now() });
           setTimeout(() => avisar({ titulo: `Te invitaron a ${pl.hashtag}`, texto: `${pl.snap.local} vs ${pl.snap.visita} en ${pl.lugar}`, tono: "oro" }), 400);
@@ -2228,11 +2370,69 @@ export default function LaPrevia() {
   }, [avisar]);
 
   useEffect(() => {
-    if (listo.current) guardar("previa:planes", planes);
+    if (listo.current && !NUBE) guardar("previa:planes", planes);
   }, [planes]);
+  useEffect(() => {
+    if (listo.current && !NUBE) guardar("previa:general", general.slice(-300));
+  }, [general]);
+
+  // Nube: carga todo y se suscribe a cambios para ver al momento lo que agregan otros dispositivos.
+  const recargar = useCallback(async () => {
+    try {
+      const r = await leerNube(recordatoriosRef.current);
+      if (r) {
+        setPlanes(r.planes);
+        setGeneral(r.general);
+      }
+    } catch {
+      avisar({ titulo: "Sin conexión con la nube", texto: "Reintentando…", tono: "vivo" });
+    }
+  }, [avisar]);
+
+  useEffect(() => {
+    if (!NUBE) return;
+    const nube = NUBE;
+    recargar();
+    let espera: ReturnType<typeof setTimeout> | undefined;
+    const pronto = () => {
+      clearTimeout(espera);
+      espera = setTimeout(recargar, 250);
+    };
+    const c = nube
+      .channel("la-previa", { config: { presence: { key: uid() } } })
+      .on("postgres_changes", { event: "*", schema: "public", table: "planes" }, pronto)
+      .on("postgres_changes", { event: "*", schema: "public", table: "confirmados" }, pronto)
+      .on("postgres_changes", { event: "*", schema: "public", table: "mensajes" }, pronto)
+      .on("presence", { event: "sync" }, () => {
+        const estado = c.presenceState<{ nombre: string }>();
+        const nombres = Object.values(estado).flatMap((xs) => xs.map((x) => x.nombre || "Anónimo"));
+        setEnLinea([...new Set(nombres)].sort());
+      })
+      .subscribe((st) => {
+        if (st === "SUBSCRIBED") {
+          c.track({ nombre: leer<string>("previa:yo", "") });
+          pronto();
+        }
+      });
+    canal.current = c;
+    // Al volver a la app desde segundo plano (móviles) se pone al día.
+    const visible = () => document.visibilityState === "visible" && pronto();
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      clearTimeout(espera);
+      document.removeEventListener("visibilitychange", visible);
+      canal.current = null;
+      nube.removeChannel(c);
+    };
+  }, [recargar]);
+
+  useEffect(() => {
+    canal.current?.track({ nombre: yo }).catch(() => {});
+  }, [yo]);
 
   // Sincroniza entre pestañas abiertas del mismo dispositivo.
   useEffect(() => {
+    if (NUBE) return;
     const f = (e: StorageEvent) => {
       if (e.key === "previa:planes" && e.newValue) setPlanes(JSON.parse(e.newValue) as Plan[]);
     };
@@ -2328,7 +2528,27 @@ export default function LaPrevia() {
   };
 
 
-  const guardarPin = (pl: Plan) => {
+  const cambiarPlan = (id: string, f: (pl: Plan) => Plan) => setPlanes((xs) => xs.map((x) => (x.id === id ? f(x) : x)));
+  const fallo = (texto = "No se guardó, revisa tu conexión.") => {
+    avisar({ titulo: "Algo salió mal", texto, tono: "vivo" });
+    recargar();
+  };
+
+  const guardarPin = async (pl: Plan) => {
+    if (NUBE) {
+      const clave = uid() + uid();
+      const { confirmados: _c, chat: _m, recordatorios: _r, partidoId, ...resto } = pl;
+      const { error } = await NUBE.rpc("crear_plan", { p: { ...resto, partido_id: partidoId }, p_clave: clave });
+      if (error) {
+        avisar(
+          error.code === "23505"
+            ? { titulo: `${pl.hashtag} ya lo usa alguien más`, texto: "Elige otro hashtag.", tono: "vivo" }
+            : { titulo: "No se pudo guardar el pin", texto: "Revisa tu conexión e inténtalo otra vez.", tono: "vivo" },
+        );
+        return;
+      }
+      guardar("previa:claves", { ...leer<Record<string, string>>("previa:claves", {}), [pl.id]: clave });
+    }
     setPlanes((xs) => [...xs, pl]);
     setBorrador(null);
     setAbierto(pl.id);
@@ -2339,7 +2559,47 @@ export default function LaPrevia() {
     avisar({ titulo: `¡Pin clavado! ${pl.hashtag}`, texto: "Compártelo para que tus amigos se apunten.", tono: "oro" });
   };
 
-  const actualizar = (pl: Plan) => setPlanes((xs) => xs.map((x) => (x.id === pl.id ? pl : x)));
+  const borrarPlan = async (pl: Plan) => {
+    if (NUBE) {
+      const claves = leer<Record<string, string>>("previa:claves", {});
+      const { data, error } = await NUBE.rpc("borrar_plan", { p_id: pl.id, p_clave: claves[pl.id] ?? "" });
+      if (error) return fallo();
+      if (!data) {
+        avisar({ titulo: "Solo quien creó el pin puede borrarlo", texto: "Bórralo desde el dispositivo donde lo clavaste.", tono: "vivo" });
+        return;
+      }
+      delete claves[pl.id];
+      guardar("previa:claves", claves);
+    }
+    setPlanes((xs) => xs.filter((x) => x.id !== pl.id));
+    setAbierto(null);
+    avisar({ titulo: `Plan ${pl.hashtag} borrado` });
+  };
+
+  const alternarVoy = async (pl: Plan, nombre: string) => {
+    const voy = pl.confirmados.includes(nombre);
+    cambiarPlan(pl.id, (x) => ({ ...x, confirmados: voy ? x.confirmados.filter((n) => n !== nombre) : [...x.confirmados, nombre] }));
+    if (!NUBE) return;
+    const { error } = voy
+      ? await NUBE.from("confirmados").delete().eq("plan_id", pl.id).eq("nombre", nombre)
+      : await NUBE.from("confirmados").insert({ plan_id: pl.id, nombre });
+    if (error && error.code !== "23505") fallo();
+  };
+
+  const mandarMensaje = async (sala: string, autor: string, texto: string) => {
+    const m: Mensaje = { id: uid(), autor, texto, hora: new Date().toISOString() };
+    if (sala === SALA_GENERAL) setGeneral((xs) => [...xs, m]);
+    else cambiarPlan(sala, (x) => ({ ...x, chat: [...x.chat, m] }));
+    if (!NUBE) return;
+    const { error } = await NUBE.from("mensajes").insert({ sala, autor, texto });
+    if (error) fallo("Tu mensaje no se envió.");
+  };
+
+  const cambiarRecordatorios = (pl: Plan, r: Plan["recordatorios"]) => {
+    cambiarPlan(pl.id, (x) => ({ ...x, recordatorios: r }));
+    recordatoriosRef.current = { ...recordatoriosRef.current, [pl.id]: r };
+    guardar("previa:recordatorios", recordatoriosRef.current);
+  };
 
   const compartirTexto = async (mensaje: string, url: string) => {
     if (navigator.share && window.matchMedia("(pointer: coarse)").matches) {
@@ -2368,7 +2628,9 @@ export default function LaPrevia() {
   };
 
   const panelLateral =
-    vista === "planes" ? (
+    vista === "chat" ? (
+      <ChatEnVivo mensajes={general} yo={yo} enLinea={enLinea} onEnviar={(t) => conNombre((n) => mandarMensaje(SALA_GENERAL, n, t))} />
+    ) : vista === "planes" ? (
       <ListaPlanes planes={planes} partidosPorId={partidosPorId} ahora={ahora} yo={yo} onAbrir={(pl) => (abrirPlan(pl), window.innerWidth < 1024 && setVista("mapa"))} onNuevo={() => empezarPin()} />
     ) : (
       <Calendario
@@ -2549,9 +2811,10 @@ export default function LaPrevia() {
               [
                 ["partidos", "Calendario", CalendarDays],
                 ["planes", "Planes", ListChecks],
+                ["chat", "Chat en vivo", MessageCircle],
               ] as const
             ).map(([v, t, Icono]) => {
-              const activo = v === "planes" ? vista === "planes" : vista !== "planes";
+              const activo = v === "partidos" ? vista === "partidos" || vista === "mapa" : vista === v;
               return (
                 <button
                   key={v}
@@ -2577,6 +2840,7 @@ export default function LaPrevia() {
             ["mapa", "Mapa", MapaIcon],
             ["partidos", "Partidos", CalendarDays],
             ["planes", "Planes", Home],
+            ["chat", "Chat", MessageCircle],
           ] as const
         ).map(([v, t, Icono]) => (
           <button key={v} onClick={() => setVista(v)} className={`relative flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[11px] font-bold ${vista === v ? "text-noche" : "text-white/60"}`}>
@@ -2611,13 +2875,11 @@ export default function LaPrevia() {
             yo={yo}
             permisoAvisos={permiso}
             onPedirNombre={conNombre}
-            onActualizar={actualizar}
+            onVoy={alternarVoy}
+            onMensaje={(pl, n, t) => mandarMensaje(pl.id, n, t)}
+            onRecordatorios={cambiarRecordatorios}
             onCompartir={compartirPlan}
-            onBorrar={(pl) => {
-              setPlanes((xs) => xs.filter((x) => x.id !== pl.id));
-              setAbierto(null);
-              avisar({ titulo: `Plan ${pl.hashtag} borrado` });
-            }}
+            onBorrar={borrarPlan}
             onPedirPermiso={pedirPermiso}
             onCerrar={() => setAbierto(null)}
           />
