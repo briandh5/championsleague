@@ -9,10 +9,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
-import { feature } from "topojson-client";
+import { feature, merge, neighbors } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import type { FeatureCollection, Geometry } from "geojson";
 import mundoTopo from "world-atlas/countries-110m.json";
+import eeuuTopo from "us-atlas/states-10m.json";
 import {
   Bell,
   BellRing,
@@ -38,6 +39,7 @@ import {
   Send,
   Share2,
   Sparkles,
+  Trash2,
   Trophy,
   UserRound,
   Users,
@@ -473,69 +475,6 @@ const sugerirHashtag = (ciudad: string, existentes: string[]) => {
 const EMOJI: Record<TipoLugar, string> = { bar: "🍺", restaurante: "🌮", casa: "🏠" };
 const NOMBRE_TIPO: Record<TipoLugar, string> = { bar: "Bar", restaurante: "Restaurante", casa: "Casa" };
 
-/* ─────────────────────────── Planes de muestra ─────────────────────────── */
-
-const BASE_SEMILLAS: (Omit<Plan, "id" | "partidoId" | "snap" | "chat" | "recordatorios" | "creado"> & { mensajes: [string, string][] })[] = [
-  {
-    lugar: "La Cantina del Gol", tipo: "bar", pais: "México", estado: "Ciudad de México", ciudad: "Ciudad de México",
-    lat: 19.4194, lng: -99.1627, hashtag: "#ChampionsCDMX", anfitrion: "Brian", confirmados: ["Brian", "Sofía", "Diego", "Mariana"],
-    mensajes: [["Sofía", "¿Aparto mesa para 6?"], ["Brian", "Sí, junto a la pantalla grande 📺"], ["Diego", "Llego al medio tiempo, guárdenme alitas"]],
-  },
-  {
-    lugar: "Tacos El Güero", tipo: "restaurante", pais: "México", estado: "Jalisco", ciudad: "Guadalajara",
-    lat: 20.6736, lng: -103.344, hashtag: "#TacosYUEFA", anfitrion: "Diego", confirmados: ["Diego", "Pau", "Toño"],
-    mensajes: [["Toño", "Llevo la bufanda de la suerte 🧣"], ["Pau", "Yo invito las aguas frescas"]],
-  },
-  {
-    lugar: "Casa de Memo", tipo: "casa", pais: "México", estado: "Nuevo León", ciudad: "Monterrey",
-    lat: 25.6866, lng: -100.3161, hashtag: "#RegiosChampions", anfitrion: "Memo", confirmados: ["Memo", "Ana"],
-    mensajes: [["Memo", "Yo pongo la carne asada, ustedes las bebidas 🔥"]],
-  },
-  {
-    lugar: "Bar El Larguero", tipo: "bar", pais: "España", estado: "Comunidad de Madrid", ciudad: "Madrid",
-    lat: 40.4237, lng: -3.7016, hashtag: "#MadridEnLaPrevia", anfitrion: "Lucía", confirmados: ["Lucía", "Javi", "Carmen"],
-    mensajes: [["Javi", "Abren a las 20:00, hay que llegar pronto"]],
-  },
-  {
-    lugar: "Parrilla La Gambeta", tipo: "restaurante", pais: "Argentina", estado: "Buenos Aires", ciudad: "Buenos Aires",
-    lat: -34.5871, lng: -58.4253, hashtag: "#ChampionsBA", anfitrion: "Nico", confirmados: ["Nico", "Flor", "Brian"],
-    mensajes: [["Flor", "¿Quién trae el mate?"]],
-  },
-  {
-    lugar: "Casa de Vale", tipo: "casa", pais: "Colombia", estado: "Bogotá D.C.", ciudad: "Bogotá",
-    lat: 4.6533, lng: -74.0836, hashtag: "#ChampionsBogota", anfitrion: "Vale", confirmados: ["Vale", "Santi"],
-    mensajes: [["Santi", "Pongo la pantalla del cuarto, se ve brutal"]],
-  },
-];
-function planesDeMuestra(partidos: Partido[], ahora: number): Plan[] {
-  const futuros = partidos.filter((p) => p.local.id !== "tbd" && Date.parse(p.inicio) + 112 * 60000 > ahora);
-  if (!futuros.length) return [];
-  // Preferimos los cruces con más cartel para la muestra.
-  const grandes = ["rma", "bar", "mci", "liv", "bay", "psg", "ars", "int", "atm", "mun"];
-  const orden = [...futuros.slice(0, 15)].sort(
-    (a, b) =>
-      Number(grandes.includes(b.local.id) || grandes.includes(b.visita.id)) -
-      Number(grandes.includes(a.local.id) || grandes.includes(a.visita.id)),
-  );
-  return BASE_SEMILLAS.map(({ mensajes, ...s }, i) => {
-    const p = orden[i % orden.length];
-    return {
-      ...s,
-      id: `demo-${i}`,
-      partidoId: p.id,
-      snap: { local: p.local.nombre, visita: p.visita.nombre, inicio: p.inicio },
-      chat: mensajes.map(([autor, texto], k) => ({
-        id: uid(),
-        autor,
-        texto,
-        hora: new Date(ahora - (mensajes.length - k) * 17 * 60000).toISOString(),
-      })),
-      recordatorios: { dia: true, hora: true },
-      creado: new Date(ahora).toISOString(),
-    };
-  });
-}
-
 /* ─────────────────────────── Hooks de estado ─────────────────────────── */
 
 function useAhora(desfase: number) {
@@ -950,13 +889,114 @@ function Calendario({
 
 /* ─────────────────────────── Mapa ilustrado (SVG) ─────────────────────────── */
 
-// Dibujo del mundo hecho con los países de Natural Earth incluidos en la app: no llama a ninguna API ni usa ubicación en tiempo real.
-const MUNDO = feature(
-  mundoTopo as unknown as Topology,
-  (mundoTopo as unknown as Topology<{ countries: GeometryCollection<{ name: string }> }>).objects.countries,
-) as FeatureCollection<Geometry, { name: string }>;
+// Dibujo del mundo hecho con datos de Natural Earth y del censo de EE. UU. incluidos en la app:
+// no llama a ninguna API ni usa ubicación en tiempo real; el pin se pone libremente en el dibujo.
+type TopoPaises = Topology<{ countries: GeometryCollection<{ name: string }> }>;
+type TopoEstados = Topology<{ states: GeometryCollection<{ name: string }> }>;
+const TOPO_MUNDO = mundoTopo as unknown as TopoPaises;
+const TOPO_EEUU = eeuuTopo as unknown as TopoEstados;
+const MUNDO = feature(TOPO_MUNDO, TOPO_MUNDO.objects.countries) as FeatureCollection<Geometry, { name: string }>;
 const ESFERA = { type: "Sphere" } as const;
-const PASTEL = ["#ffd166", "#a8e6a1", "#ffb4a2", "#bde0fe", "#f7c8e0", "#c3f0ca", "#ffe29a", "#cdb4db"];
+const PASTEL = ["#ffd166", "#a8e6a1", "#ffb4a2", "#bde0fe", "#f7c8e0", "#c3f0ca", "#ffe29a", "#cdb4db", "#9ad1d4"];
+const ID_FRANCIA = "250";
+const ID_ESPANA = "724";
+const ID_MEXICO = "484";
+const ID_EEUU = "840";
+
+// Colores sin repetir entre vecinos para que cada país (sobre todo en Europa) se distinga a simple vista.
+const COLOR_PAIS: Record<string, string> = (() => {
+  const geos = TOPO_MUNDO.objects.countries.geometries;
+  const vecinos = neighbors(geos as Parameters<typeof neighbors>[0]);
+  const elegido: number[] = [];
+  const orden = geos.map((_, i) => i).sort((a, b) => vecinos[b].length - vecinos[a].length);
+  for (const i of orden) {
+    const usados = new Set(vecinos[i].map((j) => elegido[j]));
+    let c = hash(String(geos[i].id)) % PASTEL.length;
+    for (let n = 0; n < PASTEL.length && usados.has(c); n++) c = (c + 1) % PASTEL.length;
+    elegido[i] = c;
+  }
+  return Object.fromEntries(geos.map((g, i) => [String(g.id), PASTEL[elegido[i]]]));
+})();
+
+/** Regiones de Estados Unidos (agrupando estados por código FIPS). */
+const REGIONES_EEUU: { nombre: string; color: string; fips: string[]; lon: number; lat: number }[] = [
+  { nombre: "West Coast", color: "#9ad1d4", fips: ["53", "41", "16", "30", "56", "02", "15"], lon: -116.5, lat: 45.5 },
+  { nombre: "Lo robado", color: "#ff9f6e", fips: ["06", "32", "49", "04", "35", "48", "08"], lon: -108, lat: 34 },
+  { nombre: "Norte", color: "#bde0fe", fips: ["38", "46", "31", "20", "27", "19", "29", "55", "17", "26", "18", "39", "40"], lon: -95.5, lat: 43 },
+  {
+    nombre: "East Coast",
+    color: "#c3f0ca",
+    fips: ["23", "33", "50", "25", "44", "09", "36", "34", "42", "10", "24", "11", "51", "54", "37", "45", "13", "12", "01", "28", "47", "21", "22", "05"],
+    lon: -80.5,
+    lat: 36,
+  },
+];
+const GEO_REGIONES_EEUU = REGIONES_EEUU.map((r) => ({
+  ...r,
+  geo: merge(TOPO_EEUU, TOPO_EEUU.objects.states.geometries.filter((g) => r.fips.includes(String(g.id))) as Parameters<typeof merge>[1]),
+}));
+
+/** Regiones de México: polígonos aproximados (lon, lat) recortados con la silueta del país. El primero es la base. */
+const REGIONES_MEXICO: { nombre: string; color: string; puntos: [number, number][]; lon: number; lat: number; minK: number }[] = [
+  { nombre: "Resto del sur", color: "#ffd166", puntos: [[-110, 22.6], [-97.3, 22.4], [-85, 22.6], [-85, 13], [-110, 13]], lon: -103, lat: 19.6, minK: 3.5 },
+  { nombre: "El norte", color: "#ffb4a2", puntos: [[-120, 34], [-95, 34], [-97.4, 22.4], [-105.6, 22.6], [-120, 22.6]], lon: -106, lat: 28.5, minK: 2.6 },
+  {
+    nombre: "Veracruz",
+    color: "#a8e6a1",
+    puntos: [[-98.5, 22.4], [-97.4, 22.4], [-96.2, 19.6], [-95.2, 18.6], [-94, 18.2], [-93.6, 17.7], [-94.6, 17.2], [-95.6, 17.8], [-96.6, 18.6], [-97.4, 19.6], [-98, 20.6], [-98.6, 21.4]],
+    lon: -96.6,
+    lat: 19.8,
+    minK: 4.2,
+  },
+  { nombre: "CDMX", color: "#f7c8e0", puntos: [[-99.75, 20.05], [-98.75, 20.05], [-98.75, 18.95], [-99.75, 18.95]], lon: -99.25, lat: 19.5, minK: 5.5 },
+  {
+    nombre: "Oaxaca y sus playas",
+    color: "#9ad1d4",
+    puntos: [[-98.6, 18.6], [-96.7, 18.5], [-95.6, 17.8], [-94.6, 17.2], [-93.9, 16.4], [-94.2, 15.6], [-96.4, 15.4], [-98.6, 16.2]],
+    lon: -96.7,
+    lat: 16.9,
+    minK: 4,
+  },
+  {
+    nombre: "Riviera Maya y alrededores",
+    color: "#cdb4db",
+    puntos: [[-92.6, 22.6], [-85, 22.6], [-85, 17.8], [-89.2, 17.8], [-90.9, 17.8], [-91.4, 18.4], [-92.6, 18.7]],
+    lon: -88.6,
+    lat: 20,
+    minK: 3,
+  },
+];
+
+/** Nombres en español para ubicar el mapa: [id ISO, nombre, lon, lat, zoom mínimo]. Europa aparece al acercar. */
+const NOMBRES_PAISES: [string, string, number, number, number][] = [
+  ["124", "Canadá", -105, 58, 1], ["840", "Estados Unidos", -99, 39.5, 1], ["484", "México", -102.5, 24, 1], ["076", "Brasil", -52, -10, 1],
+  ["032", "Argentina", -65, -35, 1], ["643", "Rusia", 95, 62, 1], ["156", "China", 103, 34, 1], ["356", "India", 79, 22, 1],
+  ["036", "Australia", 134, -25, 1], ["304", "Groenlandia", -41, 73, 1], ["398", "Kazajistán", 67, 48, 1.4], ["012", "Argelia", 2.5, 27, 1.4],
+  ["682", "Arabia Saudita", 45, 24, 1.4], ["710", "Sudáfrica", 24, -30, 1.4], ["170", "Colombia", -73.5, 3.5, 1.6], ["604", "Perú", -75, -9.5, 1.6],
+  ["152", "Chile", -71, -30, 2], ["862", "Venezuela", -66, 7.5, 2], ["068", "Bolivia", -64.5, -17, 2], ["192", "Cuba", -79, 21.8, 2.5],
+  ["818", "Egipto", 29.8, 26.5, 1.6], ["566", "Nigeria", 8, 9.5, 2], ["180", "R. D. del Congo", 23.5, -3, 1.8], ["231", "Etiopía", 39.5, 8.5, 2],
+  ["504", "Marruecos", -6.5, 31.5, 2], ["364", "Irán", 54, 32.5, 1.8], ["360", "Indonesia", 117, -1.5, 1.8], ["392", "Japón", 138.5, 36.5, 2],
+  ["496", "Mongolia", 103, 47, 1.8], ["434", "Libia", 17.5, 27, 1.8],
+  // Europa
+  ["724", "España", -4.3, 41.9, 1.6], ["250", "Francia", 2.4, 46.6, 1.4], ["620", "Portugal", -8.1, 39.6, 3], ["826", "Reino Unido", -2.2, 53.4, 2.2],
+  ["372", "Irlanda", -8, 53.2, 4], ["276", "Alemania", 10.4, 51.1, 2], ["380", "Italia", 12.6, 42.8, 2.2], ["528", "Países Bajos", 5.6, 52.4, 4.2],
+  ["056", "Bélgica", 4.6, 50.6, 4.6], ["756", "Suiza", 8.2, 46.8, 4.4], ["040", "Austria", 14.5, 47.6, 3.6], ["616", "Polonia", 19.4, 52.1, 2.4],
+  ["203", "Chequia", 15.4, 49.8, 3.6], ["703", "Eslovaquia", 19.6, 48.7, 4.4], ["348", "Hungría", 19.4, 47.1, 3.8], ["191", "Croacia", 16.2, 45.3, 4.4],
+  ["688", "Serbia", 20.8, 44, 4.2], ["642", "Rumanía", 25, 45.9, 3], ["100", "Bulgaria", 25.4, 42.7, 3.8], ["300", "Grecia", 22, 39.4, 3.2],
+  ["792", "Turquía", 35, 39, 2], ["804", "Ucrania", 31.5, 49, 2.2], ["578", "Noruega", 9, 61.5, 2.2], ["752", "Suecia", 15, 62.5, 2.2],
+  ["246", "Finlandia", 26, 63.5, 2.4], ["208", "Dinamarca", 9.3, 56.1, 3.8], ["031", "Azerbaiyán", 47.7, 40.3, 4], ["112", "Bielorrusia", 28, 53.5, 3],
+];
+
+/** Estadio de cada club de la fase de liga (lat, lon). Shakhtar juega en sede neutral, por eso no aparece. */
+const ESTADIOS: Record<string, [number, number]> = {
+  ars: [51.5549, -0.1084], avl: [52.5092, -1.8848], liv: [53.4308, -2.9608], mci: [53.4831, -2.2004], mun: [53.4631, -2.2913],
+  len: [50.4328, 2.815], lil: [50.6119, 3.1305], psg: [48.8414, 2.253], bay: [48.2188, 11.6247], bvb: [51.4926, 7.4519],
+  rbl: [51.3458, 12.3483], vfb: [48.7922, 9.232], int: [45.4781, 9.124], nap: [40.828, 14.193], rom: [41.9339, 12.4547],
+  com: [45.8137, 9.0722], fey: [51.8939, 4.5231], psv: [51.4417, 5.4675], bod: [67.2766, 14.3953], vik: [58.9469, 5.7353],
+  por: [41.1617, -8.5839], scp: [38.7612, -9.1609], slo: [48.1636, 17.1367], atm: [40.4362, -3.5995], bar: [41.3809, 2.1228],
+  bet: [37.3565, -5.9817], rma: [40.4531, -3.6883], vil: [39.9441, -0.1035], fen: [40.9877, 29.037], gal: [41.1034, 28.9908],
+  cbr: [51.1933, 3.1806], sla: [50.0677, 14.4716], aek: [38.0363, 23.7544], lask: [48.2944, 14.3086], sab: [40.44, 49.851],
+};
 
 type Foco = { lat: number; lng: number; zoom: number; n: number } | null;
 interface VistaMapa {
@@ -975,13 +1015,7 @@ function PinSvg({ tipo, color, activo, etiqueta, nuevo }: { tipo: TipoLugar | "n
       style={{ originX: "50%", originY: "100%" }}
     >
       <g transform="translate(-22 -52)" style={{ filter: "drop-shadow(3px 4px 0 rgba(6,8,26,.55))" }}>
-        <path
-          d="M22 2C11 2 2 10.6 2 21.4 2 36 22 52 22 52s20-16 20-30.6C42 10.6 33 2 22 2z"
-          fill={color}
-          stroke="#0b0e28"
-          strokeWidth="3.5"
-          strokeLinejoin="round"
-        />
+        <path d="M22 2C11 2 2 10.6 2 21.4 2 36 22 52 22 52s20-16 20-30.6C42 10.6 33 2 22 2z" fill={color} stroke="#0b0e28" strokeWidth="3.5" strokeLinejoin="round" />
         <circle cx="22" cy="21" r="12.5" fill="#fff" stroke="#0b0e28" strokeWidth="2.5" />
         <text x="22" y="27" textAnchor="middle" fontSize="16">
           {tipo === "nuevo" ? "⚽" : EMOJI[tipo]}
@@ -997,6 +1031,35 @@ function PinSvg({ tipo, color, activo, etiqueta, nuevo }: { tipo: TipoLugar | "n
       )}
     </motion.g>
   );
+}
+
+/** Copa estilizada (dibujo propio) que se pinta de fondo en España. Caja de 100 × 160. */
+function CopaDibujo() {
+  return (
+    <g>
+      <path d="M22 160h56l-4-22H26z" fill="#0f7a45" stroke="#0b0e28" strokeWidth="2.5" />
+      <path d="M26 148h48" stroke="#f2c94c" strokeWidth="4" />
+      <path
+        d="M30 138c2-18 10-30 14-44-9-8-22-14-24-30-1-10 4-18 10-22 4 10 8 20 18 26 2-10 0-18-6-26 8 2 14 8 16 16 4-8 10-14 18-16-6 8-8 16-6 26 10-6 14-16 18-26 6 4 11 12 10 22-2 16-15 22-24 30 4 14 12 26 14 44z"
+        fill="#f2c94c"
+        stroke="#0b0e28"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+      />
+      <circle cx="50" cy="26" r="20" fill="#f8df8e" stroke="#0b0e28" strokeWidth="2.5" />
+      <path d="M33 18c10 4 24 4 34 0M31 30c12 5 26 5 38 0M50 6c-6 8-6 32 0 40M50 6c6 8 6 32 0 40" fill="none" stroke="#c99a1e" strokeWidth="2" />
+      <path d="M40 100c4 10 16 10 20 0" fill="none" stroke="#c99a1e" strokeWidth="2.5" />
+    </g>
+  );
+}
+
+function Estrella({ x, y, r }: { x: number; y: number; r: number }) {
+  const pts = Array.from({ length: 10 }, (_, i) => {
+    const a = (Math.PI / 5) * i - Math.PI / 2;
+    const rr = i % 2 ? r * 0.45 : r;
+    return `${x + rr * Math.cos(a)},${y + rr * Math.sin(a)}`;
+  }).join(" ");
+  return <polygon points={pts} fill="#f2c94c" stroke="#0b0e28" strokeWidth="1.5" strokeLinejoin="round" />;
 }
 
 function MapaSvg({
@@ -1049,10 +1112,34 @@ function MapaSvg({
   );
   const esfera = useMemo(() => camino(ESFERA) ?? "", [camino]);
   const reticula = useMemo(() => camino(geoGraticule10()) ?? "", [camino]);
+  const regionesEeuu = useMemo(() => GEO_REGIONES_EEUU.map((r) => ({ ...r, d: camino(r.geo) ?? "" })), [camino]);
+  const regionesMexico = useMemo(
+    () =>
+      REGIONES_MEXICO.map((r) => ({
+        ...r,
+        d:
+          r.puntos
+            .map((p, i) => {
+              const q = proy(p) ?? [0, 0];
+              return `${i ? "L" : "M"}${q[0].toFixed(2)},${q[1].toFixed(2)}`;
+            })
+            .join("") + "Z",
+      })),
+    [proy],
+  );
+  const mexico = formas.find((f) => f.id === ID_MEXICO)?.d ?? "";
+  const espana = useMemo(() => {
+    const f = MUNDO.features.find((x) => String(x.id) === ID_ESPANA);
+    if (!f) return null;
+    const [[x0, y0], [x1, y1]] = camino.bounds(f);
+    const alto = (y1 - y0) * 0.92;
+    const s = alto / 160;
+    return { d: camino(f) ?? "", transform: `translate(${(x0 + x1) / 2 - 50 * s} ${y0 + (y1 - y0) * 0.04}) scale(${s})` };
+  }, [camino]);
 
   const limitar = useCallback(
     (v: VistaMapa): VistaMapa => {
-      const k = Math.min(14, Math.max(1, v.k));
+      const k = Math.min(16, Math.max(1, v.k));
       const { w, h } = tam;
       return { k, x: Math.min(w * 0.6, Math.max(w - w * k - w * 0.6, v.x)), y: Math.min(h * 0.6, Math.max(h - h * k - h * 0.6, v.y)) };
     },
@@ -1092,8 +1179,8 @@ function MapaSvg({
     iniciado.current = true;
     const b = camino.bounds(ESFERA);
     const alto = b[1][1] - b[0][1];
-    const k = Math.min(3.2, Math.max(1, (tam.h * 0.95) / alto));
-    const p = proy([tam.w < 640 ? -70 : -35, 18]) ?? [tam.w / 2, tam.h / 2];
+    const k = Math.min(2.2, Math.max(1.3, (tam.h * 0.95) / alto));
+    const p = proy([tam.w < 640 ? -70 : -38, 26]) ?? [tam.w / 2, tam.h / 2];
     setVista(limitar({ k, x: tam.w / 2 - p[0] * k, y: tam.h / 2 - p[1] * k }));
   }, [tam, camino, proy, limitar]);
 
@@ -1117,7 +1204,7 @@ function MapaSvg({
   const zoomEn = useCallback(
     (sx: number, sy: number, nk: number) => {
       const v = vistaRef.current;
-      const k = Math.min(14, Math.max(1, nk));
+      const k = Math.min(16, Math.max(1, nk));
       setVista(limitar({ k, x: sx - (sx - v.x) * (k / v.k), y: sy - (sy - v.y) * (k / v.k) }));
     },
     [limitar],
@@ -1198,9 +1285,43 @@ function MapaSvg({
     const p = proy([lng, lat]);
     return p ? { x: p[0] * vista.k + vista.x, y: p[1] * vista.k + vista.y } : null;
   };
+  const visible = (s: { x: number; y: number } | null, margen = 40): s is { x: number; y: number } =>
+    !!s && s.x > -margen && s.y > -margen && s.x < tam.w + margen && s.y < tam.h + margen;
 
   const noche = estilo === "noche";
   const pines = [...planes].sort((a, b) => Number(a.id === activo) - Number(b.id === activo));
+  const k = vista.k;
+  // Zoom "efectivo": en pantallas angostas el mundo se dibuja más chico, así que los nombres aparecen más tarde.
+  const ke = k * Math.min(1, Math.max(tam.w, 1) / 820);
+  const tinta = noche ? "#00f0ff" : "#0b0e28";
+  const fondoTexto = noche ? "#0b0e28" : "#ffffff";
+  const tamEscudo = k * Math.min(1, Math.max(tam.w, 1) / 820) >= 7 ? 28 : k * Math.min(1, Math.max(tam.w, 1) / 820) >= 4.5 ? 22 : 16;
+
+  const etiqueta = (txt: string, s: { x: number; y: number }, tipo: "pais" | "region") => (
+    <text
+      key={`${tipo}-${txt}`}
+      x={s.x}
+      y={s.y}
+      textAnchor="middle"
+      dominantBaseline="middle"
+      fontFamily="var(--font-titulo), sans-serif"
+      fontWeight={tipo === "region" ? 800 : 700}
+      fontStyle={tipo === "region" ? "italic" : "normal"}
+      fontSize={tipo === "region" ? 13 : k >= 3 ? 13 : 11.5}
+      letterSpacing={tipo === "pais" ? 1.2 : 0.4}
+      fill={tipo === "region" ? (noche ? "#f2c94c" : "#0b0e28") : noche ? "#c9cdf2" : "#1d2560"}
+      stroke={fondoTexto}
+      strokeWidth={3.5}
+      paintOrder="stroke"
+      strokeLinejoin="round"
+      style={{ textTransform: "uppercase" }}
+      pointerEvents="none"
+    >
+      {txt}
+    </text>
+  );
+
+  const francia = aPantalla(2.4, 46.9);
 
   return (
     <div ref={caja} className={`absolute inset-0 overflow-hidden ${noche ? "bg-noche-950" : "bg-[#1b2a6b]"}`}>
@@ -1217,46 +1338,132 @@ function MapaSvg({
           aria-label="Mapa del mundo para poner pines"
         >
           <defs>
-            <pattern id="trama" width="6" height="6" patternUnits="userSpaceOnUse">
-              <circle cx="3" cy="3" r="0.9" fill={noche ? "rgba(0,240,255,.12)" : "rgba(11,14,40,.13)"} />
+            <pattern id="trama" width={6 / k} height={6 / k} patternUnits="userSpaceOnUse">
+              <circle cx={3 / k} cy={3 / k} r={0.9 / k} fill={noche ? "rgba(0,240,255,.12)" : "rgba(11,14,40,.13)"} />
             </pattern>
+            <clipPath id="recorte-mexico">
+              <path d={mexico} />
+            </clipPath>
+            {espana && (
+              <clipPath id="recorte-espana">
+                <path d={espana.d} />
+              </clipPath>
+            )}
+            <linearGradient id="oro-francia" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stopColor="#f8df8e" />
+              <stop offset="0.55" stopColor="#f2c94c" />
+              <stop offset="1" stopColor="#c99a1e" />
+            </linearGradient>
           </defs>
-          <g transform={`translate(${vista.x} ${vista.y}) scale(${vista.k})`}>
+          <g transform={`translate(${vista.x} ${vista.y}) scale(${k})`}>
             <path d={esfera} fill={noche ? "#0b0e28" : "#7fd3ea"} stroke="#0b0e28" strokeWidth={3} vectorEffect="non-scaling-stroke" />
             <path d={reticula} fill="none" stroke={noche ? "rgba(0,240,255,.12)" : "rgba(255,255,255,.55)"} strokeWidth={1} strokeDasharray="3 4" vectorEffect="non-scaling-stroke" />
-            <g>
-              {formas.map((f) => (
-                <path
-                  key={f.id}
-                  d={f.d}
-                  fill={noche ? "#1d2560" : PASTEL[hash(f.id) % PASTEL.length]}
-                  stroke={noche ? "#00f0ff" : "#0b0e28"}
-                  strokeWidth={noche ? 0.7 : 1.4}
-                  strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke"
-                  className="transition-[filter] duration-150 hover:brightness-110"
-                >
-                  <title>{f.nombre}</title>
+            {formas.map((f) => (
+              <path
+                key={f.id}
+                d={f.d}
+                fill={f.id === ID_FRANCIA ? "url(#oro-francia)" : f.id === ID_ESPANA ? (noche ? "#5a1020" : "#e4504f") : noche ? "#1d2560" : COLOR_PAIS[f.id] ?? PASTEL[0]}
+                stroke={f.id === ID_FRANCIA ? "#0b0e28" : tinta}
+                strokeWidth={f.id === ID_FRANCIA ? 2.2 : noche ? 0.8 : 1.4}
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+              >
+                <title>{NOMBRES_PAISES.find((n) => n[0] === f.id)?.[1] ?? f.nombre}</title>
+              </path>
+            ))}
+
+            {/* Estados Unidos por regiones */}
+            {regionesEeuu.map((r) => (
+              <path key={r.nombre} d={r.d} fill={noche ? "#232c6e" : r.color} stroke={tinta} strokeWidth={noche ? 0.9 : 1.6} strokeLinejoin="round" vectorEffect="non-scaling-stroke">
+                <title>{r.nombre}</title>
+              </path>
+            ))}
+
+            {/* México por regiones */}
+            <g clipPath="url(#recorte-mexico)">
+              {regionesMexico.map((r) => (
+                <path key={r.nombre} d={r.d} fill={noche ? "#232c6e" : r.color} stroke={tinta} strokeWidth={noche ? 0.9 : 1.4} strokeLinejoin="round" vectorEffect="non-scaling-stroke">
+                  <title>{r.nombre}</title>
                 </path>
               ))}
             </g>
+            <path d={mexico} fill="none" stroke={tinta} strokeWidth={noche ? 1 : 1.8} vectorEffect="non-scaling-stroke" />
+
+            {/* España con la Copa de fondo */}
+            {espana && (
+              <g clipPath="url(#recorte-espana)" opacity={0.9}>
+                <g transform={espana.transform}>
+                  <CopaDibujo />
+                </g>
+              </g>
+            )}
+            {espana && <path d={espana.d} fill="none" stroke={tinta} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />}
+
             <path d={esfera} fill="url(#trama)" pointerEvents="none" />
           </g>
+
+          {/* Nombres de países y regiones */}
+          {NOMBRES_PAISES.map(([id, nombre, lon, lat, minK]) => {
+            if (ke < minK) return null;
+            if ((id === ID_MEXICO || id === ID_EEUU) && ke >= 1.8) return null;
+            if (id === ID_FRANCIA) return null;
+            const s = aPantalla(lon, lat);
+            return visible(s) ? etiqueta(nombre, s, "pais") : null;
+          })}
+          {ke >= 1.8 &&
+            REGIONES_EEUU.map((r) => {
+              const s = aPantalla(r.lon, r.lat);
+              return visible(s) ? etiqueta(r.nombre, s, "region") : null;
+            })}
+          {REGIONES_MEXICO.map((r) => {
+            if (ke < r.minK) return null;
+            const s = aPantalla(r.lon, r.lat);
+            return visible(s) ? etiqueta(r.nombre, s, "region") : null;
+          })}
+
+          {/* Francia: dos estrellas y la leyenda */}
+          {visible(francia, 120) && (
+            <g transform={`translate(${francia.x} ${francia.y})`} pointerEvents="none">
+              <Estrella x={-9} y={ke >= 2 ? -14 : -4} r={ke >= 2 ? 8 : 6} />
+              <Estrella x={9} y={ke >= 2 ? -14 : -4} r={ke >= 2 ? 8 : 6} />
+              {ke >= 2 && etiqueta("Francia", { x: 0, y: 4 }, "pais")}
+            </g>
+          )}
+
+          {(() => {
+              const s = aPantalla(-5.5, 48.2);
+              return visible(s, 200) ? (
+                <g transform={`translate(${s.x} ${s.y})`} pointerEvents="none">
+                  <rect x={-176} y={-11} width={172} height={22} rx={11} fill="#0b0e28" stroke="#f2c94c" strokeWidth={2} />
+                  <text x={-90} y={4.5} textAnchor="middle" fontSize={12} fontWeight={800} fill="#f2c94c" fontFamily="var(--font-cuerpo), sans-serif">
+                    Fuerza a la tierra del bi
+                  </text>
+                  <path d="M-4 0h10" stroke="#f2c94c" strokeWidth={2} />
+                </g>
+              ) : null;
+            })()}
+
+          {/* Escudos de los clubes en su estadio al acercar */}
+          {ke >= 3.5 &&
+            Object.entries(ESTADIOS).map(([id, [lat, lon]]) => {
+              const eq = EQUIPOS[id];
+              const s = aPantalla(lon, lat);
+              if (!eq || !visible(s)) return null;
+              return (
+                <foreignObject key={id} x={s.x - tamEscudo / 2} y={s.y - tamEscudo / 2} width={tamEscudo} height={tamEscudo} pointerEvents="none">
+                  <div title={`${eq.nombre} · ${eq.estadio}`} style={{ width: tamEscudo, height: tamEscudo }}>
+                    <Escudo equipo={eq} tam={tamEscudo} />
+                  </div>
+                </foreignObject>
+              );
+            })}
 
           {pines.map((pl) => {
             const s = aPantalla(pl.lng, pl.lat);
             if (!s) return null;
             const esActivo = activo === pl.id;
             return (
-              <g
-                key={pl.id}
-                data-pin
-                transform={`translate(${s.x} ${s.y})`}
-                className="cursor-pointer"
-                onClick={() => onAbrir(pl)}
-                role="button"
-                aria-label={`${pl.hashtag} en ${pl.lugar}`}
-              >
+              <g key={pl.id} data-pin transform={`translate(${s.x} ${s.y})`} className="cursor-pointer" onClick={() => onAbrir(pl)} role="button" aria-label={`${pl.hashtag} en ${pl.lugar}`}>
                 <PinSvg tipo={pl.tipo} color={color(pl)} activo={esActivo} etiqueta={esActivo ? pl.hashtag : undefined} />
               </g>
             );
@@ -1319,7 +1526,8 @@ function Buscador({
             exit={{ opacity: 0, y: -6 }}
             className="absolute left-0 right-0 top-full mt-2 overflow-hidden rounded-2xl border border-white/10 bg-noche-800/95 shadow-2xl backdrop-blur"
           >
-            {!texto && (
+            {!texto && populares.length === 0 && <p className="p-4 text-sm text-white/60">Todavía no hay pines. Pon el primero con el botón “Poner mi pin”.</p>}
+            {!texto && populares.length > 0 && (
               <div className="flex flex-wrap gap-1.5 p-3">
                 {populares.map((t) => (
                   <button
@@ -1575,6 +1783,7 @@ function DetallePlan({
   onActualizar,
   onCompartir,
   onPedirPermiso,
+  onBorrar,
   onCerrar,
 }: {
   plan: Plan;
@@ -1586,9 +1795,11 @@ function DetallePlan({
   onActualizar: (pl: Plan) => void;
   onCompartir: (pl: Plan) => void;
   onPedirPermiso: () => void;
+  onBorrar: (pl: Plan) => void;
   onCerrar: () => void;
 }) {
   const [texto, setTexto] = useState("");
+  const [confirmarBorrar, setConfirmarBorrar] = useState(false);
   const fin = useRef<HTMLDivElement>(null);
   const voy = !!yo && plan.confirmados.includes(yo);
   const inicio = partido?.inicio ?? plan.snap.inicio;
@@ -1781,6 +1992,22 @@ function DetallePlan({
             </button>
           </form>
         </div>
+        {/* Borrar */}
+        <div className="rounded-2xl border border-vivo/30 bg-vivo/[.06] p-3">
+          {confirmarBorrar ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="min-w-0 flex-1 text-sm font-bold">¿Borrar {plan.hashtag} del mapa?</p>
+              <Boton onClick={() => setConfirmarBorrar(false)}>Cancelar</Boton>
+              <Boton tono="vivo" onClick={() => onBorrar(plan)}>
+                <Trash2 className="h-4 w-4" /> Sí, borrar
+              </Boton>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmarBorrar(true)} className="flex w-full items-center justify-center gap-2 py-1 text-sm font-bold text-vivo">
+              <Trash2 className="h-4 w-4" /> Borrar plan
+            </button>
+          )}
+        </div>
         <p className="text-center text-[11px] text-white/35">Los pines, confirmados y el chat se guardan en este dispositivo.</p>
       </div>
     </Hoja>
@@ -1970,8 +2197,8 @@ export default function LaPrevia() {
       setDesfase(des);
       setDemo(true);
     }
-    const guardados = leer<Plan[] | null>("previa:planes", null);
-    let iniciales = guardados ?? planesDeMuestra(CALENDARIO.map((p) => conEstado(p, Date.now() + des, false)), Date.now() + des);
+    // Solo los planes que alguien agregó de verdad (se descartan los de muestra de versiones anteriores).
+    let iniciales = leer<Plan[]>("previa:planes", []).filter((p) => !p.id.startsWith("demo-"));
     setYo(leer<string>("previa:yo", ""));
     setPermiso(typeof Notification === "undefined" ? "no-soportado" : Notification.permission);
 
@@ -2386,6 +2613,11 @@ export default function LaPrevia() {
             onPedirNombre={conNombre}
             onActualizar={actualizar}
             onCompartir={compartirPlan}
+            onBorrar={(pl) => {
+              setPlanes((xs) => xs.filter((x) => x.id !== pl.id));
+              setAbierto(null);
+              avisar({ titulo: `Plan ${pl.hashtag} borrado` });
+            }}
             onPedirPermiso={pedirPermiso}
             onCerrar={() => setAbierto(null)}
           />

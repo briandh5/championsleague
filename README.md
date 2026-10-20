@@ -12,14 +12,14 @@ Framer Motion · Lucide. Toda la interfaz vive en un solo componente:
 
 | Parte | Detalle |
 | --- | --- |
-| Mapa caricatura | Dibujo SVG del mundo (países de Natural Earth incluidos en la app, sin APIs ni mosaicos). Se arrastra y se acerca con rueda, pellizco o botones. Botón para cambiar a mapa de noche. |
+| Mapa caricatura | Dibujo SVG del mundo (Natural Earth + estados de EE. UU. incluidos en la app, sin APIs ni mosaicos). Países vecinos con colores distintos y nombres que aparecen al acercar. México por regiones (El norte, CDMX, Veracruz, Oaxaca y sus playas, Riviera Maya y alrededores, Resto del sur) y EE. UU. por regiones (West Coast, Lo robado, Norte, East Coast). Francia en dorado con dos estrellas y "Fuerza a la tierra del bi"; España con la Copa de fondo; al acercar, el escudo de cada club en su estadio. |
 | Pin personalizado | "Poner mi pin" → tocas el dibujo donde quieras (no usa tu ubicación) → formulario con partido, País, Estado, Ciudad, tipo de lugar, nombre del lugar, `#Hashtag` único y anfitrión. |
 | Buscador flotante | Filtra los pines por hashtag, nombre de amigo, lugar o ciudad. Muestra los hashtags más populares. |
 | Calendario | Fases (Fase de liga, Play-off, Octavos, Cuartos, Semifinal, Final), tira de días y tarjetas con escudos, estado **En vivo** con marcador y minuto o **Próximamente** con hora local. |
 | Recordatorios | 1 día y 1 hora antes, configurables por plan. Aviso dentro de la app y notificación del navegador. El botón **.ics** descarga el evento con las dos alarmas para que lleguen aunque la app esté cerrada. |
 | Compartir plan | Enlace dinámico con el mensaje "¿Qué plan para Equipo A vs Equipo B?". Quien lo abre ve el pin y puede apuntarse. WhatsApp, Telegram, X o copiar. En celular usa el menú nativo de compartir. |
 | Google Calendar | Botón que abre el evento con fecha, hora, lugar y lista de amigos ya llenos. |
-| Confirmados y chat | "¡Me apunto!" y chat rápido por plan. |
+| Confirmados y chat | "¡Me apunto!", chat rápido por plan y botón para borrar el plan. El mapa arranca vacío: solo aparecen los planes que alguien agrega. |
 
 ## Datos
 
