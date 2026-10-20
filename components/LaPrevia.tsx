@@ -2568,6 +2568,17 @@ interface FilaMensaje {
 
 type Recordatorios = Record<string, Plan["recordatorios"]>;
 
+// Si la base no tiene la columna `responde`, la cita viaja dentro del texto en una primera línea marcada (invisible).
+const MARCA_CITA = "\u2063";
+const citaEnTexto = (r: Respuesta, texto: string) => `${MARCA_CITA}${r.autor}${MARCA_CITA}${r.texto.replace(/\s+/g, " ").slice(0, 100)}\n${texto}`;
+function leerCitaEnTexto(texto: string): Respuesta | null {
+  if (!texto.startsWith(MARCA_CITA)) return null;
+  const fin = texto.indexOf("\n");
+  const [, autor, cita] = texto.slice(0, fin < 0 ? undefined : fin).split(MARCA_CITA);
+  return autor ? { autor, texto: cita ?? "" } : null;
+}
+const quitarCitaDeTexto = (texto: string) => texto.slice(texto.indexOf("\n") + 1);
+
 /** Lee todo lo compartido y lo arma como planes con sus confirmados y su chat. */
 async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[]; general: Mensaje[] } | null> {
   if (!NUBE) return null;
@@ -2578,7 +2589,10 @@ async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[];
   ]);
   if (pl.error || co.error || me.error) throw pl.error ?? co.error ?? me.error;
   const mensajes = ((me.data ?? []) as FilaMensaje[]).reverse();
-  const aMensaje = (m: FilaMensaje): Mensaje => ({ id: m.id, autor: m.autor, texto: m.texto, hora: m.hora, ...(m.responde ? { responde: m.responde } : {}) });
+  const aMensaje = (m: FilaMensaje): Mensaje => {
+    const r = m.responde ?? leerCitaEnTexto(m.texto);
+    return { id: m.id, autor: m.autor, texto: r && !m.responde ? quitarCitaDeTexto(m.texto) : m.texto, hora: m.hora, ...(r ? { responde: r } : {}) };
+  };
   const planes = ((pl.data ?? []) as FilaPlan[]).map((f) => ({
     id: f.id,
     partidoId: f.partido_id,
@@ -3313,8 +3327,11 @@ export default function LaPrevia() {
     else cambiarPlan(sala, (x) => ({ ...x, chat: [...x.chat, m] }));
     if (!NUBE) return;
     let { error } = await NUBE.from("mensajes").insert({ sala, autor, texto, ...(responde ? { responde } : {}) });
-    // Si la base aún no tiene la columna `responde` (schema.sql viejo), se manda sin la cita.
-    if (error && responde && /responde/.test(error.message)) ({ error } = await NUBE.from("mensajes").insert({ sala, autor, texto }));
+    // Si la base aún no tiene la columna `responde` (schema.sql viejo), la cita va dentro del texto.
+    if (error && responde && /responde/.test(error.message)) {
+      const conCita = citaEnTexto(responde, texto);
+      ({ error } = await NUBE.from("mensajes").insert({ sala, autor, texto: conCita.length <= 500 ? conCita : texto }));
+    }
     if (error) fallo(`Tu mensaje no se envió: ${error.message}`);
   };
 
