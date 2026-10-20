@@ -22,6 +22,7 @@ Framer Motion · Lucide · Supabase (Postgres + Realtime). Toda la interfaz vive
 | Google Calendar | Botón que abre el evento con fecha, hora, lugar y lista de amigos ya llenos. |
 | Confirmados y chat | "¡Me apunto!", chat rápido por plan y botón para borrar el plan (solo desde el dispositivo que lo creó). El mapa arranca vacío: solo aparecen los planes que alguien agrega. |
 | Stats | Tabla de la fase de liga (36 clubes) calculada con los resultados oficiales y el marcador en vivo: PJ, G, E, P, DG y puntos, con zonas de octavos, play-off y eliminados. En Partidos, bajo cada equipo se ve su posición y puntos para saber qué lugares se enfrentan. |
+| Mi calendario y avisos | El icono de la copa en el encabezado abre tu día de hoy (tus planes, tus eventos personales y los partidos) y deja agregar eventos con enlace a Google Calendar. Un punto rojo cuenta las invitaciones a planes y los mensajes nuevos en los planes donde participas. Los eventos personales y lo ya leído se guardan en tu dispositivo. |
 | Chat en vivo | Sala general para ponerse de acuerdo en el momento, con cuántas personas están conectadas y sus nombres. |
 
 ## Datos

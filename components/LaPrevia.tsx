@@ -2449,6 +2449,281 @@ function ChatEnVivo({
   );
 }
 
+/* ─────────────────────────── Mi calendario y avisos ─────────────────────────── */
+
+interface EventoPersonal {
+  id: string;
+  titulo: string;
+  inicio: string; // ISO en UTC
+  lugar: string;
+}
+
+const esParticipante = (pl: Plan, yo: string, invitaciones: string[]) => invitaciones.includes(pl.id) || (!!yo && (pl.anfitrion === yo || pl.confirmados.includes(yo)));
+const msMensaje = (m: Mensaje) => Date.parse(m.hora) || 0;
+
+function CentroPersonal({
+  yo,
+  ahora,
+  partidos,
+  planes,
+  eventos,
+  invitados,
+  conChat,
+  tabInicial,
+  onAbrirPlan,
+  onDescartar,
+  onAgregar,
+  onBorrar,
+  onArmar,
+  onCerrar,
+}: {
+  yo: string;
+  ahora: number;
+  partidos: Partido[];
+  planes: Plan[];
+  eventos: EventoPersonal[];
+  invitados: Plan[];
+  conChat: { pl: Plan; nuevos: number }[];
+  tabInicial: "avisos" | "dia";
+  onAbrirPlan: (pl: Plan) => void;
+  onDescartar: (pl: Plan) => void;
+  onAgregar: (e: EventoPersonal) => void;
+  onBorrar: (id: string) => void;
+  onArmar: (p: Partido) => void;
+  onCerrar: () => void;
+}) {
+  const [tab, setTab] = useState<"avisos" | "dia">(tabInicial);
+  const [nuevo, setNuevo] = useState(false);
+  const hoyClave = claveDia(new Date(ahora).toISOString());
+  const [titulo, setTitulo] = useState("");
+  const [fecha, setFecha] = useState(hoyClave);
+  const [hora, setHora] = useState(() => {
+    const d = new Date(ahora + 3600000);
+    return `${String(d.getHours()).padStart(2, "0")}:00`;
+  });
+  const [lugar, setLugar] = useState("");
+  const total = invitados.length + conChat.length;
+
+  const guardarEvento = (e: React.FormEvent) => {
+    e.preventDefault();
+    const inicio = new Date(`${fecha}T${hora}`);
+    if (!titulo.trim() || Number.isNaN(inicio.getTime())) return;
+    onAgregar({ id: uid(), titulo: titulo.trim(), inicio: inicio.toISOString(), lugar: lugar.trim() });
+    setTitulo("");
+    setLugar("");
+    setNuevo(false);
+  };
+
+  type Item = { clave: string; cuando: string; tipo: "partido" | "plan" | "evento"; nodo: React.ReactNode };
+  const items: Item[] = [];
+  const delDia: Item[] = [];
+  const [verTodos, setVerTodos] = useState(false);
+  for (const p of partidos) {
+    if (p.local.id === "tbd" || claveDia(p.inicio) !== hoyClave) continue;
+    delDia.push({
+      clave: `p-${p.id}`,
+      cuando: p.inicio,
+      tipo: "partido",
+      nodo: (
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-bold">
+              {p.local.corto} vs {p.visita.corto}
+            </p>
+            <p className="truncate text-xs text-white/45">
+              {p.estado === "vivo" ? "En vivo" : p.estado === "final" ? "Terminado" : "Champions"} · {p.estadio}
+            </p>
+          </div>
+          {p.estado !== "final" && (
+            <Boton tono="neon" onClick={() => onArmar(p)}>
+              <MapPin className="h-4 w-4" /> Plan
+            </Boton>
+          )}
+        </div>
+      ),
+    });
+  }
+  for (const pl of planes) {
+    if (!yo || !(pl.anfitrion === yo || pl.confirmados.includes(yo)) || claveDia(pl.snap.inicio) !== hoyClave) continue;
+    items.push({
+      clave: `pl-${pl.id}`,
+      cuando: pl.snap.inicio,
+      tipo: "plan",
+      nodo: (
+        <button onClick={() => onAbrirPlan(pl)} className="flex w-full items-center gap-3 text-left">
+          <span className="text-xl">{EMOJI[pl.tipo]}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-bold text-oro">{pl.hashtag}</span>
+            <span className="block truncate text-xs text-white/45">
+              {pl.snap.local} vs {pl.snap.visita} · {pl.lugar}
+            </span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-white/40" />
+        </button>
+      ),
+    });
+  }
+  for (const ev of eventos) {
+    if (claveDia(ev.inicio) !== hoyClave) continue;
+    items.push({ clave: `e-${ev.id}`, cuando: ev.inicio, tipo: "evento", nodo: <FilaEvento ev={ev} onBorrar={onBorrar} /> });
+  }
+  items.sort((a, b) => Date.parse(a.cuando) - Date.parse(b.cuando));
+  delDia.sort((a, b) => Date.parse(a.cuando) - Date.parse(b.cuando));
+  const partidosVisibles = verTodos ? delDia : delDia.slice(0, 3);
+  const fila = (it: Item) => (
+    <div key={it.clave} className="flex gap-3 rounded-2xl border border-white/10 bg-noche-800/80 p-3">
+      <div className="w-12 shrink-0 text-center">
+        <p className="font-display text-lg font-bold leading-none">{fmtHora(it.cuando)}</p>
+        <p className="mt-1 text-[10px] font-extrabold uppercase tracking-wider text-white/40">{it.tipo === "partido" ? "Partido" : it.tipo === "plan" ? "Plan" : "Evento"}</p>
+      </div>
+      <div className="min-w-0 flex-1">{it.nodo}</div>
+    </div>
+  );
+
+  const proximos = eventos.filter((e) => claveDia(e.inicio) > hoyClave).sort((a, b) => Date.parse(a.inicio) - Date.parse(b.inicio)).slice(0, 10);
+
+  return (
+    <Hoja titulo="Mi calendario" onCerrar={onCerrar}>
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-2xl bg-white/[.06] p-1">
+        {(
+          [
+            ["avisos", "Avisos"],
+            ["dia", "Mi día"],
+          ] as const
+        ).map(([v, t]) => (
+          <button key={v} onClick={() => setTab(v)} className={`relative rounded-xl py-2 text-sm font-bold transition ${tab === v ? "bg-neon text-noche" : "text-white/60"}`}>
+            {t}
+            {v === "avisos" && total > 0 && <span className="ml-1.5 inline-grid h-5 min-w-5 place-items-center rounded-full bg-vivo px-1 text-[11px] font-extrabold text-white">{total}</span>}
+          </button>
+        ))}
+      </div>
+
+      {tab === "avisos" ? (
+        <div className="space-y-2 pb-2">
+          {total === 0 && (
+            <div className="py-10 text-center">
+              <Check className="mx-auto mb-2 h-8 w-8 text-neon" />
+              <p className="font-bold">Estás al día</p>
+              <p className="mx-auto mt-1 max-w-[16rem] text-sm text-white/50">Aquí verás las invitaciones a planes y los mensajes nuevos de los planes donde participas.</p>
+            </div>
+          )}
+          {invitados.map((pl) => (
+            <div key={pl.id} className="rounded-2xl border border-oro/40 bg-oro/[.07] p-3">
+              <p className="text-[11px] font-extrabold uppercase tracking-wider text-oro">Invitación</p>
+              <p className="mt-0.5 text-sm font-bold">
+                {pl.anfitrion} te invitó a {pl.hashtag}
+              </p>
+              <p className="text-xs text-white/55">
+                {pl.snap.local} vs {pl.snap.visita} · {fmtDiaLargo(pl.snap.inicio)}, {fmtHora(pl.snap.inicio)} · {pl.lugar}
+              </p>
+              <div className="mt-2 flex gap-2">
+                <Boton tono="oro" className="flex-1" onClick={() => onAbrirPlan(pl)}>
+                  Ver plan
+                </Boton>
+                <Boton onClick={() => onDescartar(pl)}>Descartar</Boton>
+              </div>
+            </div>
+          ))}
+          {conChat.map(({ pl, nuevos }) => (
+            <button key={pl.id} onClick={() => onAbrirPlan(pl)} className="flex w-full items-center gap-3 rounded-2xl border border-neon/30 bg-neon/[.06] p-3 text-left">
+              <span className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full bg-neon/15 text-neon">
+                <MessageCircle className="h-5 w-5" />
+                <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-vivo px-1 text-[11px] font-extrabold text-white">{nuevos}</span>
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-bold">
+                  {nuevos} {nuevos === 1 ? "mensaje nuevo" : "mensajes nuevos"} en {pl.hashtag}
+                </span>
+                <span className="block truncate text-xs text-white/50">
+                  {(() => {
+                    const m = [...pl.chat].reverse().find((x) => x.autor !== yo);
+                    return m ? `${m.autor}: ${m.texto}` : "";
+                  })()}
+                </span>
+              </span>
+              <ChevronRight className="h-4 w-4 text-white/40" />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-3 pb-2">
+          <p className="text-sm font-semibold text-white/60 first-letter:uppercase">{fmtDiaLargo(`${hoyClave}T12:00:00`)}</p>
+          {items.length === 0 && <p className="rounded-2xl bg-white/[.05] p-4 text-center text-sm text-white/50">No tienes planes ni eventos para hoy.</p>}
+          <div className="space-y-2">{items.map(fila)}</div>
+
+          {nuevo ? (
+            <form onSubmit={guardarEvento} className="space-y-3 rounded-2xl border border-neon/30 bg-white/[.04] p-3">
+              <input autoFocus value={titulo} onChange={(e) => setTitulo(e.target.value)} maxLength={60} placeholder="¿Qué vas a hacer?" className={claseInput} aria-label="Título del evento" />
+              <div className="grid grid-cols-2 gap-2">
+                <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={claseInput} aria-label="Fecha" />
+                <input type="time" value={hora} onChange={(e) => setHora(e.target.value)} className={claseInput} aria-label="Hora" />
+              </div>
+              <input value={lugar} onChange={(e) => setLugar(e.target.value)} maxLength={80} placeholder="Lugar (opcional)" className={claseInput} aria-label="Lugar" />
+              <div className="flex gap-2">
+                <Boton onClick={() => setNuevo(false)}>Cancelar</Boton>
+                <Boton tipo="submit" tono="neon" className="flex-1" disabled={!titulo.trim()}>
+                  <Plus className="h-4 w-4" /> Guardar evento
+                </Boton>
+              </div>
+            </form>
+          ) : (
+            <Boton tono="neon" className="w-full" onClick={() => setNuevo(true)}>
+              <Plus className="h-4 w-4" /> Agregar evento
+            </Boton>
+          )}
+
+          {delDia.length > 0 && (
+            <div className="pt-1">
+              <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-white/40">Champions hoy · {delDia.length} {delDia.length === 1 ? "partido" : "partidos"}</p>
+              <div className="space-y-2">{partidosVisibles.map(fila)}</div>
+              {delDia.length > 3 && (
+                <button onClick={() => setVerTodos((v) => !v)} className="mt-2 w-full rounded-xl bg-white/[.06] py-2 text-sm font-bold text-white/70">
+                  {verTodos ? "Ver menos" : `Ver los ${delDia.length - 3} restantes`}
+                </button>
+              )}
+            </div>
+          )}
+
+          {proximos.length > 0 && (
+            <div className="pt-1">
+              <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-white/40">Próximos eventos</p>
+              <div className="space-y-2">
+                {proximos.map((ev) => (
+                  <div key={ev.id} className="rounded-2xl border border-white/10 bg-noche-800/80 p-3">
+                    <FilaEvento ev={ev} onBorrar={onBorrar} conFecha />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="text-center text-[11px] text-white/35">Tus eventos personales se guardan solo en este dispositivo.</p>
+        </div>
+      )}
+    </Hoja>
+  );
+}
+
+function FilaEvento({ ev, onBorrar, conFecha }: { ev: EventoPersonal; onBorrar: (id: string) => void; conFecha?: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-bold">{ev.titulo}</p>
+        <p className="truncate text-xs text-white/45">
+          {conFecha ? `${fmtDiaLargo(ev.inicio)}, ` : ""}
+          {fmtHora(ev.inicio)}
+          {ev.lugar ? ` · ${ev.lugar}` : ""}
+        </p>
+      </div>
+      <Boton href={enlaceGoogleCalendar(ev.titulo, ev.inicio, ev.lugar, "Evento creado en La Previa")} titulo="Añadir a Google Calendar">
+        <CalendarPlus className="h-4 w-4" />
+      </Boton>
+      <Boton onClick={() => onBorrar(ev.id)} titulo="Borrar evento">
+        <Trash2 className="h-4 w-4" />
+      </Boton>
+    </div>
+  );
+}
+
 /* ─────────────────────────── App principal ─────────────────────────── */
 
 export default function LaPrevia() {
@@ -2477,6 +2752,10 @@ export default function LaPrevia() {
   const [avisos, setAvisos] = useState<Aviso[]>([]);
   const [permiso, setPermiso] = useState<NotificationPermission | "no-soportado">("default");
   const [general, setGeneral] = useState<Mensaje[]>([]);
+  const [centro, setCentro] = useState<"avisos" | "dia" | null>(null);
+  const [eventos, setEventos] = useState<EventoPersonal[]>([]);
+  const [invitaciones, setInvitaciones] = useState<string[]>([]);
+  const [vistos, setVistos] = useState<Record<string, string>>({});
   const [enLinea, setEnLinea] = useState<string[]>([]);
   const listo = useRef(false);
   // En modo nube: recordatorios y llaves para borrar viven solo en este dispositivo.
@@ -2504,6 +2783,9 @@ export default function LaPrevia() {
     // Solo los planes que alguien agregó de verdad (se descartan los de muestra de versiones anteriores).
     let iniciales = NUBE ? [] : leer<Plan[]>("previa:planes", []).filter((p) => !p.id.startsWith("demo-"));
     recordatoriosRef.current = leer<Recordatorios>("previa:recordatorios", {});
+    setEventos(leer<EventoPersonal[]>("previa:eventos", []));
+    setVistos(leer<Record<string, string>>("previa:vistos", {}));
+    let invs = leer<string[]>("previa:invitaciones", []);
     if (!NUBE) setGeneral(leer<Mensaje[]>("previa:general", []));
     setYo(leer<string>("previa:yo", ""));
     setPermiso(typeof Notification === "undefined" ? "no-soportado" : Notification.permission);
@@ -2516,6 +2798,8 @@ export default function LaPrevia() {
           // Con la nube el plan ya está compartido; sin ella se agrega desde el enlace.
           const ya = iniciales.find((x) => x.id === pl.id);
           if (!ya && !NUBE) iniciales = [...iniciales, { ...pl, chat: pl.chat ?? [] }];
+          // Quien abre un enlace de plan queda invitado: le sale en el centro de avisos hasta que se apunte o lo descarte.
+          if (pl.anfitrion !== leer<string>("previa:yo", "") && !invs.includes(pl.id)) invs = [...invs, pl.id];
           setAbierto(pl.id);
           setFoco({ lat: pl.lat, lng: pl.lng, zoom: 5, n: Date.now() });
           setTimeout(() => avisar({ titulo: `Te invitaron a ${pl.hashtag}`, texto: `${pl.snap.local} vs ${pl.snap.visita} en ${pl.lugar}`, tono: "oro" }), 400);
@@ -2530,6 +2814,7 @@ export default function LaPrevia() {
       setVista("partidos");
     }
     if (compartido || partidoCompartido) window.history.replaceState(null, "", window.location.pathname + (params.get("demo") ? "?demo=vivo" : ""));
+    setInvitaciones(invs);
     setPlanes(iniciales);
     listo.current = true;
   }, [avisar]);
@@ -2540,6 +2825,44 @@ export default function LaPrevia() {
   useEffect(() => {
     if (listo.current && !NUBE) guardar("previa:general", general.slice(-300));
   }, [general]);
+  useEffect(() => {
+    if (listo.current) guardar("previa:eventos", eventos);
+  }, [eventos]);
+  useEffect(() => {
+    if (listo.current) guardar("previa:invitaciones", invitaciones);
+  }, [invitaciones]);
+  useEffect(() => {
+    if (listo.current) guardar("previa:vistos", vistos);
+  }, [vistos]);
+
+  // Avisos: lo último que leí de cada plan donde participo (al empezar a participar no hay avisos viejos),
+  // y se marca como leído el chat del plan que tengo abierto.
+  useEffect(() => {
+    if (!listo.current) return;
+    setVistos((v) => {
+      let cambio = false;
+      const nuevo = { ...v };
+      const marca = new Date().toISOString();
+      for (const pl of planes) {
+        const ultimo = pl.chat.length ? Math.max(...pl.chat.map(msMensaje)) : 0;
+        if (pl.id === abierto) {
+          if ((Date.parse(nuevo[pl.id] ?? "") || 0) < ultimo || !nuevo[pl.id]) (nuevo[pl.id] = marca), (cambio = true);
+        } else if (!nuevo[pl.id] && esParticipante(pl, yo, invitaciones)) (nuevo[pl.id] = marca), (cambio = true);
+      }
+      return cambio ? nuevo : v;
+    });
+  }, [planes, abierto, yo, invitaciones]);
+
+  const invitados = useMemo(() => planes.filter((pl) => invitaciones.includes(pl.id) && !(yo && pl.confirmados.includes(yo))), [planes, invitaciones, yo]);
+  const conChat = useMemo(
+    () =>
+      planes
+        .filter((pl) => pl.id !== abierto && esParticipante(pl, yo, invitaciones))
+        .map((pl) => ({ pl, nuevos: pl.chat.filter((m) => m.autor !== yo && vistos[pl.id] && msMensaje(m) > (Date.parse(vistos[pl.id]) || 0)).length }))
+        .filter((x) => x.nuevos > 0),
+    [planes, abierto, yo, invitaciones, vistos],
+  );
+  const pendientes = invitados.length + conChat.length;
 
   // Nube: carga todo y se suscribe a cambios para ver al momento lo que agregan otros dispositivos.
   const recargar = useCallback(async () => {
@@ -2754,6 +3077,7 @@ export default function LaPrevia() {
 
   const alternarVoy = async (pl: Plan, nombre: string) => {
     const voy = pl.confirmados.includes(nombre);
+    if (!voy) setInvitaciones((xs) => xs.filter((i) => i !== pl.id));
     cambiarPlan(pl.id, (x) => ({ ...x, confirmados: voy ? x.confirmados.filter((n) => n !== nombre) : [...x.confirmados, nombre] }));
     if (!NUBE) return;
     const { error } = voy
@@ -2828,9 +3152,21 @@ export default function LaPrevia() {
       {/* Encabezado */}
       <header className="z-[1000] flex items-center gap-3 border-b border-white/10 bg-noche/80 px-4 py-2.5 backdrop-blur pt-[max(.625rem,env(safe-area-inset-top))]">
         <div className="flex items-center gap-2">
-          <motion.div whileHover={{ rotate: 8, scale: 1.08 }} className="h-10 w-10 drop-shadow-[0_0_8px_rgba(0,240,255,.45)]">
+          <motion.button
+            whileHover={{ rotate: 8, scale: 1.08 }}
+            whileTap={{ scale: 0.92 }}
+            onClick={() => setCentro(pendientes > 0 ? "avisos" : "dia")}
+            className="relative h-10 w-10 drop-shadow-[0_0_8px_rgba(0,240,255,.45)]"
+            aria-label={pendientes > 0 ? `Mi calendario y avisos, ${pendientes} nuevos` : "Mi calendario y avisos"}
+            title="Mi calendario y avisos"
+          >
             <IconoCopaCalendario />
-          </motion.div>
+            {pendientes > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 grid h-[18px] min-w-[18px] place-items-center rounded-full border-2 border-noche bg-vivo px-1 text-[10px] font-extrabold leading-none text-white">
+                {pendientes > 9 ? "9+" : pendientes}
+              </span>
+            )}
+          </motion.button>
           <div className="leading-none">
             <p className="font-display text-xl font-extrabold uppercase tracking-wide">
               La <span className="text-neon">Previa</span>
@@ -3063,6 +3399,34 @@ export default function LaPrevia() {
             onBorrar={borrarPlan}
             onPedirPermiso={pedirPermiso}
             onCerrar={() => setAbierto(null)}
+          />
+        )}
+        {centro && (
+          <CentroPersonal
+            key="centro"
+            yo={yo}
+            ahora={ahora}
+            partidos={partidos}
+            planes={planes}
+            eventos={eventos}
+            invitados={invitados}
+            conChat={conChat}
+            tabInicial={centro}
+            onAbrirPlan={(pl) => {
+              setCentro(null);
+              abrirPlan(pl);
+            }}
+            onDescartar={(pl) => setInvitaciones((xs) => xs.filter((i) => i !== pl.id))}
+            onAgregar={(e) => {
+              setEventos((xs) => [...xs, e]);
+              avisar({ titulo: "Evento guardado", texto: e.titulo, tono: "neon" });
+            }}
+            onBorrar={(id) => setEventos((xs) => xs.filter((e) => e.id !== id))}
+            onArmar={(p) => {
+              setCentro(null);
+              empezarPin(p.id);
+            }}
+            onCerrar={() => setCentro(null)}
           />
         )}
         {compartir && (
