@@ -41,6 +41,8 @@ create table if not exists public.mensajes (
   hora   timestamptz not null default now()
 );
 create index if not exists mensajes_sala_hora on public.mensajes (sala, hora);
+-- Respuestas: copia corta del mensaje al que se contesta ({"autor": "...", "texto": "..."}).
+alter table public.mensajes add column if not exists responde jsonb;
 
 alter table public.planes        enable row level security;
 alter table public.planes_claves enable row level security;

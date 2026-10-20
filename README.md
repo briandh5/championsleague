@@ -13,7 +13,7 @@ Framer Motion · Lucide · Supabase (Postgres + Realtime). Toda la interfaz vive
 
 | Parte | Detalle |
 | --- | --- |
-| Mapa caricatura | Dibujo SVG del mundo (Natural Earth + estados de EE. UU. incluidos en la app, sin APIs ni mosaicos). Países vecinos con colores distintos y nombres que aparecen al acercar. México por regiones (El norte, CDMX, Veracruz, Oaxaca y sus playas, Riviera Maya y alrededores, Resto del sur) y EE. UU. por regiones (West Coast, Lo robado, Norte, East Coast). Francia en dorado con dos estrellas y el escudo del PSG; España con la Copa de fondo; al acercar, el escudo de cada club en su estadio. |
+| Mapa caricatura | Dibujo SVG del mundo (Natural Earth + estados de EE. UU. incluidos en la app, sin APIs ni mosaicos). Países vecinos con colores distintos y nombres que aparecen al acercar. México por regiones (El norte, CDMX, Veracruz, Oaxaca y sus playas, Riviera Maya y alrededores, Resto del sur) y EE. UU. por regiones (West Coast, Lo robado, Norte, East Coast). Francia en dorado con dos estrellas y el escudo del PSG; España con la Copa de fondo; al acercar, el escudo de cada club en su estadio; al tocarlo sale una burbuja con su historia en la Champions (títulos con año y estrella, o su mejor resultado). |
 | Pin personalizado | "Poner mi pin" → tocas el dibujo donde quieras (no usa tu ubicación) → formulario con partido, País, Estado, Ciudad, tipo de lugar, nombre del lugar, `#Hashtag` único y anfitrión. |
 | Buscador flotante | Filtra los pines por hashtag, nombre de amigo, lugar o ciudad. Muestra los hashtags más populares. |
 | Calendario | Fases (Fase de liga, Play-off, Octavos, Cuartos, Semifinal, Final), tira de días y tarjetas con escudos, estado **En vivo** con marcador y minuto o **Próximamente** con hora local. |
@@ -23,7 +23,7 @@ Framer Motion · Lucide · Supabase (Postgres + Realtime). Toda la interfaz vive
 | Confirmados y chat | "¡Me apunto!", chat rápido por plan y botón para borrar el plan (solo desde el dispositivo que lo creó). El mapa arranca vacío: solo aparecen los planes que alguien agrega. |
 | Stats | Tabla de la fase de liga (36 clubes) calculada con los resultados oficiales y el marcador en vivo: PJ, G, E, P, DG y puntos, con zonas de octavos, play-off y eliminados. En Partidos, bajo cada equipo se ve su posición y puntos para saber qué lugares se enfrentan. |
 | Mi calendario y avisos | El icono de la copa en el encabezado abre tu día de hoy (tus planes, tus eventos personales y los partidos) y deja agregar eventos con enlace a Google Calendar. Un punto rojo cuenta las invitaciones a planes y los mensajes nuevos en los planes donde participas. Los eventos personales y lo ya leído se guardan en tu dispositivo. |
-| Chat en vivo | Sala general para ponerse de acuerdo en el momento, con cuántas personas están conectadas y sus nombres. |
+| Chat en vivo | Desliza un mensaje a la derecha (o doble clic) para responderlo; la respuesta muestra el mensaje citado. Sala general para ponerse de acuerdo en el momento, con cuántas personas están conectadas y sus nombres. |
 
 ## Datos
 

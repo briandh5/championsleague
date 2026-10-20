@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useMotionValue, useTransform } from "framer-motion";
 import { geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature, merge, neighbors } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
@@ -37,6 +37,7 @@ import {
   Minus,
   Plus,
   Radio,
+  Reply,
   Search,
   Send,
   Share2,
@@ -79,10 +80,17 @@ export interface Partido {
 
 type TipoLugar = "bar" | "restaurante" | "casa";
 
+/** Mensaje al que se contesta (se guarda una copia corta para mostrarla citada). */
+interface Respuesta {
+  autor: string;
+  texto: string;
+}
+
 interface Mensaje {
   id: string;
   autor: string;
   texto: string;
+  responde?: Respuesta;
   hora: string;
 }
 
@@ -1229,6 +1237,128 @@ function Estrella({ x, y, r }: { x: number; y: number; r: number }) {
   return <polygon points={pts} fill="#f2c94c" stroke="#0b0e28" strokeWidth="2" strokeLinejoin="round" />;
 }
 
+/**
+ * Historia de cada club en la Copa de Europa / Champions League (hasta la final de 2026).
+ * `titulos`: años de cada final ganada (año en que se jugó la final). Si no tiene títulos, `mejor` dice su mejor paso.
+ */
+const HISTORIA_UCL: Record<string, { titulos: number[]; mejor?: string; nota?: string }> = {
+  rma: { titulos: [1956, 1957, 1958, 1959, 1960, 1966, 1998, 2000, 2002, 2014, 2016, 2017, 2018, 2022, 2024], nota: "El club con más Champions de la historia." },
+  bay: { titulos: [1974, 1975, 1976, 2001, 2013, 2020] },
+  liv: { titulos: [1977, 1978, 1981, 1984, 2005, 2019] },
+  bar: { titulos: [1992, 2006, 2009, 2011, 2015] },
+  int: { titulos: [1964, 1965, 2010], nota: "Finalista en 1967, 1972, 2023 y 2025." },
+  mun: { titulos: [1968, 1999, 2008] },
+  psg: { titulos: [2025, 2026], nota: "Bicampeón vigente: 5-0 al Inter en 2025 y penales ante el Arsenal en 2026." },
+  por: { titulos: [1987, 2004] },
+  mci: { titulos: [2023] },
+  bvb: { titulos: [1997], nota: "Finalista en 2013 y 2024." },
+  avl: { titulos: [1982] },
+  fey: { titulos: [1970] },
+  psv: { titulos: [1988] },
+  atm: { titulos: [], mejor: "Finalista en 1974, 2014 y 2016" },
+  ars: { titulos: [], mejor: "Finalista en 2006 y 2026" },
+  rom: { titulos: [], mejor: "Finalista en 1984" },
+  cbr: { titulos: [], mejor: "Finalista en 1978" },
+  gal: { titulos: [], mejor: "Semifinal en 1989" },
+  rbl: { titulos: [], mejor: "Semifinal en 2020" },
+  vil: { titulos: [], mejor: "Semifinal en 2006 y 2022" },
+  scp: { titulos: [], mejor: "Cuartos de final en 1983 y 2026" },
+  nap: { titulos: [], mejor: "Cuartos de final en 2023" },
+  fen: { titulos: [], mejor: "Cuartos de final en 2008" },
+  sha: { titulos: [], mejor: "Cuartos de final en 2011" },
+  aek: { titulos: [], mejor: "Cuartos de final en 1969" },
+  lil: { titulos: [], mejor: "Octavos de final en 2007, 2022 y 2025" },
+  vfb: { titulos: [], mejor: "Octavos de final en 2004 y 2010" },
+  bod: { titulos: [], mejor: "Octavos de final en 2026, tras eliminar al Inter" },
+  slo: { titulos: [], mejor: "Segunda ronda en 1971 y 1993" },
+  len: { titulos: [], mejor: "Fase de grupos (1999, 2003 y 2024)" },
+  bet: { titulos: [], mejor: "Fase de grupos en 2006" },
+  sla: { titulos: [], mejor: "Fase de grupos (2008 y 2020)" },
+  com: { titulos: [], mejor: "Primera temporada en la Champions" },
+  vik: { titulos: [], mejor: "Primera temporada en la fase de liga" },
+  lask: { titulos: [], mejor: "Primera temporada en la fase de liga" },
+  sab: { titulos: [], mejor: "Primera temporada en la Champions" },
+};
+
+/** Burbuja con la historia del club en la Champions; se cierra con la X o tocando fuera. */
+function FichaClub({ equipo, x, y, ancho, alto, onCerrar }: { equipo: Equipo; x: number; y: number; ancho: number; alto: number; onCerrar: () => void }) {
+  const h = HISTORIA_UCL[equipo.id] ?? { titulos: [], mejor: "Sin datos" };
+  const w = Math.min(280, ancho - 24);
+  const izq = Math.max(12, Math.min(ancho - w - 12, x - w / 2));
+  // Se abre hacia donde haya más espacio; si no cabe, la burbuja hace scroll.
+  const arriba = y > alto / 2;
+  const maxAlto = Math.max(140, (arriba ? y : alto - y) - 34);
+  const caja = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const fuera = (e: PointerEvent) => !caja.current?.contains(e.target as Node) && onCerrar();
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onCerrar();
+    document.addEventListener("pointerdown", fuera);
+    window.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", fuera);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [onCerrar]);
+  const flecha = Math.max(16, Math.min(w - 16, x - izq));
+  return (
+    <>
+      <motion.div
+        ref={caja}
+        role="dialog"
+        aria-label={`Historia de ${equipo.nombre} en la Champions`}
+        initial={{ opacity: 0, scale: 0.85, y: arriba ? 8 : -8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.85 }}
+        className="absolute z-30 rounded-2xl border-2 border-neon/60 bg-noche-800/95 p-3 shadow-2xl backdrop-blur"
+        style={{ left: izq, width: w, ...(arriba ? { bottom: `calc(100% - ${y - 22}px)` } : { top: y + 22 }), transformOrigin: `${flecha}px ${arriba ? "100%" : "0"}` }}
+      >
+        <span
+          className={`absolute h-3 w-3 rotate-45 border-neon/60 bg-noche-800 ${arriba ? "-bottom-[7px] border-b-2 border-r-2" : "-top-[7px] border-l-2 border-t-2"}`}
+          style={{ left: flecha - 6 }}
+        />
+        <button onClick={onCerrar} className="absolute right-1.5 top-1.5 rounded-full p-1.5 text-white/60 hover:bg-white/10 hover:text-white" aria-label="Cerrar">
+          <X className="h-4 w-4" />
+        </button>
+        <div className="overflow-y-auto overscroll-contain" style={{ maxHeight: maxAlto - 28 }}>
+        <div className="flex items-center gap-2.5 pr-6">
+          <Escudo equipo={equipo} tam={36} />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-extrabold">{equipo.nombre}</p>
+            <p className="truncate text-[11px] text-white/50">
+              {equipo.estadio} · {equipo.ciudad}
+            </p>
+          </div>
+        </div>
+        {h.titulos.length > 0 ? (
+          <div className="mt-2.5">
+            <p className="font-display text-lg font-extrabold uppercase leading-none text-oro">
+              {h.titulos.length === 1 ? "Campeón de Europa 1 vez" : `Campeón de Europa ${h.titulos.length} veces`}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {h.titulos.map((a) => (
+                <span key={a} className="inline-flex items-center gap-1 rounded-full bg-oro/15 px-2 py-0.5 text-[11px] font-extrabold tabular-nums text-oro ring-1 ring-oro/30">
+                  <svg viewBox="-10 -10 20 20" className="h-3 w-3" aria-hidden>
+                    <Estrella x={0} y={0} r={9} />
+                  </svg>
+                  {a}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-2.5">
+            <p className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Mejor resultado</p>
+            <p className="text-sm font-bold text-neon">{h.mejor}</p>
+            <p className="mt-0.5 text-[11px] text-white/45">Todavía sin títulos de Champions.</p>
+          </div>
+        )}
+        {h.nota && <p className="mt-2 text-[11px] leading-snug text-white/55">{h.nota}</p>}
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
 function MapaSvg({
   planes,
   partidosPorId,
@@ -1489,6 +1619,12 @@ function MapaSvg({
   );
 
   const francia = aPantalla(2.4, 46.9);
+  const [ficha, setFicha] = useState<string | null>(null);
+  const cerrarFicha = useCallback(() => setFicha(null), []);
+  useEffect(() => {
+    if (modoPin) setFicha(null);
+  }, [modoPin]);
+  const posFicha = (id: string) => (id === "psg" && francia && !(ke >= 3.5) ? francia : ESTADIOS[id] ? aPantalla(ESTADIOS[id][1], ESTADIOS[id][0]) : null);
 
   return (
     <div ref={caja} className={`absolute inset-0 overflow-hidden ${noche ? "bg-noche-950" : "bg-[#1b2a6b]"}`}>
@@ -1596,8 +1732,21 @@ function MapaSvg({
                 <g transform={`translate(${francia.x} ${francia.y})`} pointerEvents="none">
                   <Estrella x={-13} y={-t / 2 - 6} r={ke >= 2 ? 14 : 12} />
                   <Estrella x={13} y={-t / 2 - 6} r={ke >= 2 ? 14 : 12} />
-                  <foreignObject x={-t / 2} y={-t / 2} width={t} height={t}>
-                    <div title="Paris Saint-Germain" style={{ width: t, height: t }}>
+                  <rect
+                    x={-t / 2}
+                    y={-t / 2}
+                    width={t}
+                    height={t}
+                    fill="transparent"
+                    {...(modoPin ? {} : { "data-pin": true })}
+                    pointerEvents="all"
+                    className="cursor-pointer"
+                    onClick={() => !modoPin && setFicha("psg")}
+                    role="button"
+                    aria-label="Historia de Paris Saint-Germain en la Champions"
+                  />
+                  <foreignObject x={-t / 2} y={-t / 2} width={t} height={t} pointerEvents="none">
+                    <div style={{ width: t, height: t }}>
                       <Escudo equipo={EQUIPOS.psg} tam={t} />
                     </div>
                   </foreignObject>
@@ -1613,11 +1762,14 @@ function MapaSvg({
               const s = aPantalla(lon, lat);
               if (!eq || !visible(s)) return null;
               return (
-                <foreignObject key={id} x={s.x - tamEscudo / 2} y={s.y - tamEscudo / 2} width={tamEscudo} height={tamEscudo} pointerEvents="none">
-                  <div title={`${eq.nombre} · ${eq.estadio}`} style={{ width: tamEscudo, height: tamEscudo }}>
-                    <Escudo equipo={eq} tam={tamEscudo} />
-                  </div>
-                </foreignObject>
+                <g key={id} {...(modoPin ? {} : { "data-pin": true })} className="cursor-pointer" onClick={() => !modoPin && setFicha(id)} role="button" aria-label={`Historia de ${eq.nombre} en la Champions`}>
+                  <circle cx={s.x} cy={s.y} r={tamEscudo / 2 + 6} fill="transparent" />
+                  <foreignObject x={s.x - tamEscudo / 2} y={s.y - tamEscudo / 2} width={tamEscudo} height={tamEscudo} pointerEvents="none">
+                    <div style={{ width: tamEscudo, height: tamEscudo }}>
+                      <Escudo equipo={eq} tam={tamEscudo} />
+                    </div>
+                  </foreignObject>
+                </g>
               );
             })}
 
@@ -1642,6 +1794,14 @@ function MapaSvg({
             })()}
         </svg>
       )}
+      <AnimatePresence>
+        {ficha &&
+          EQUIPOS[ficha] &&
+          (() => {
+            const pos = posFicha(ficha);
+            return pos && visible(pos, 0) ? <FichaClub key={ficha} equipo={EQUIPOS[ficha]} x={pos.x} y={pos.y} ancho={tam.w} alto={tam.h} onCerrar={cerrarFicha} /> : null;
+          })()}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1733,6 +1893,60 @@ function Buscador({
 }
 
 /* ─────────────────────────── Formulario del pin ─────────────────────────── */
+
+/* ─────────────────────────── Burbujas de chat ─────────────────────────── */
+
+const citar = (m: Mensaje): Respuesta => ({ autor: m.autor, texto: m.texto.length > 140 ? `${m.texto.slice(0, 140)}…` : m.texto });
+
+/** Mensaje de chat: se desliza a la derecha para responderlo. */
+function BurbujaChat({ m, mio, onResponder }: { m: Mensaje; mio: boolean; onResponder: (m: Mensaje) => void }) {
+  const x = useMotionValue(0);
+  const opacidad = useTransform(x, [0, 60], [0, 1]);
+  const escala = useTransform(x, [0, 60], [0.5, 1]);
+  return (
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className={`relative flex ${mio ? "justify-end" : "justify-start"}`}>
+      <motion.span style={{ opacity: opacidad, scale: escala }} className="pointer-events-none absolute left-1 top-1/2 -mt-4 grid h-8 w-8 place-items-center rounded-full bg-neon/20 text-neon">
+        <Reply className="h-4 w-4" />
+      </motion.span>
+      <motion.div
+        drag="x"
+        dragConstraints={{ left: 0, right: 0 }}
+        dragElastic={{ left: 0, right: 0.5 }}
+        dragSnapToOrigin
+        style={{ x }}
+        onDragEnd={(_, info) => info.offset.x > 55 && onResponder(m)}
+        onDoubleClick={() => onResponder(m)}
+        title="Desliza a la derecha (o doble clic) para responder"
+        className={`max-w-[80%] cursor-grab rounded-2xl px-3 py-2 text-sm active:cursor-grabbing ${mio ? "rounded-br-md bg-neon text-noche" : "rounded-bl-md bg-white/[.08]"}`}
+      >
+        {!mio && <p className="text-[11px] font-extrabold text-oro">{m.autor}</p>}
+        {m.responde && (
+          <div className={`mb-1 rounded-lg border-l-[3px] px-2 py-1 text-xs ${mio ? "border-noche/50 bg-noche/10" : "border-neon bg-white/[.06]"}`}>
+            <p className={`font-extrabold ${mio ? "text-noche/80" : "text-neon"}`}>{m.responde.autor}</p>
+            <p className={`line-clamp-2 ${mio ? "text-noche/70" : "text-white/60"}`}>{m.responde.texto}</p>
+          </div>
+        )}
+        <p className="whitespace-pre-wrap break-words font-medium">{m.texto}</p>
+        <p className={`mt-0.5 text-right text-[10px] ${mio ? "text-noche/60" : "text-white/40"}`}>{fmtHora(m.hora)}</p>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function BarraRespuesta({ r, onCancelar }: { r: Respuesta; onCancelar: () => void }) {
+  return (
+    <div className="flex items-center gap-2 border-t border-white/10 bg-white/[.04] px-3 py-2">
+      <Reply className="h-4 w-4 shrink-0 text-neon" />
+      <div className="min-w-0 flex-1 border-l-[3px] border-neon pl-2 text-xs">
+        <p className="font-extrabold text-neon">Respondiendo a {r.autor}</p>
+        <p className="truncate text-white/60">{r.texto}</p>
+      </div>
+      <button onClick={onCancelar} className="rounded-full p-1.5 text-white/60 hover:bg-white/10" aria-label="Cancelar respuesta">
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
 
 function Hoja({ children, onCerrar, titulo }: { children: React.ReactNode; onCerrar: () => void; titulo: string }) {
   useEffect(() => {
@@ -1958,7 +2172,7 @@ function DetallePlan({
   permisoAvisos: NotificationPermission | "no-soportado";
   onPedirNombre: (luego: (nombre: string) => void) => void;
   onVoy: (pl: Plan, nombre: string) => void;
-  onMensaje: (pl: Plan, nombre: string, texto: string) => void;
+  onMensaje: (pl: Plan, nombre: string, texto: string, responde?: Respuesta) => void;
   onRecordatorios: (pl: Plan, r: Plan["recordatorios"]) => void;
   onCompartir: (pl: Plan) => void;
   onPedirPermiso: () => void;
@@ -1967,6 +2181,8 @@ function DetallePlan({
 }) {
   const [texto, setTexto] = useState("");
   const [confirmarBorrar, setConfirmarBorrar] = useState(false);
+  const [respondiendo, setRespondiendo] = useState<Respuesta | null>(null);
+  const campo = useRef<HTMLInputElement>(null);
   const fin = useRef<HTMLDivElement>(null);
   const voy = !!yo && plan.confirmados.includes(yo);
   const inicio = partido?.inicio ?? plan.snap.inicio;
@@ -1985,8 +2201,9 @@ function DetallePlan({
     const t = texto.trim();
     if (!t) return;
     onPedirNombre((nombre) => {
-      onMensaje(plan, nombre, t);
+      onMensaje(plan, nombre, t, respondiendo ?? undefined);
       setTexto("");
+      setRespondiendo(null);
     });
   };
 
@@ -2132,22 +2349,22 @@ function DetallePlan({
           </p>
           <div className="max-h-60 space-y-2 overflow-y-auto p-3">
             {plan.chat.length === 0 && <p className="py-4 text-center text-xs text-white/40">Sin mensajes. ¡Rompe el hielo!</p>}
-            {plan.chat.map((m) => {
-              const mio = m.autor === yo;
-              return (
-                <motion.div key={m.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className={`flex ${mio ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${mio ? "rounded-br-md bg-neon text-noche" : "rounded-bl-md bg-white/[.08]"}`}>
-                    {!mio && <p className="text-[11px] font-extrabold text-oro">{m.autor}</p>}
-                    <p className="font-medium">{m.texto}</p>
-                    <p className={`mt-0.5 text-right text-[10px] ${mio ? "text-noche/60" : "text-white/40"}`}>{fmtHora(m.hora)}</p>
-                  </div>
-                </motion.div>
-              );
-            })}
+            {plan.chat.map((m) => (
+              <BurbujaChat
+                key={m.id}
+                m={m}
+                mio={m.autor === yo}
+                onResponder={(x) => {
+                  setRespondiendo(citar(x));
+                  campo.current?.focus();
+                }}
+              />
+            ))}
             <div ref={fin} />
           </div>
+          {respondiendo && <BarraRespuesta r={respondiendo} onCancelar={() => setRespondiendo(null)} />}
           <form onSubmit={enviar} className="flex gap-2 border-t border-white/10 p-2">
-            <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Escribe al grupo…" className={`${claseInput} py-2`} aria-label="Mensaje" />
+            <input ref={campo} value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Escribe al grupo…" className={`${claseInput} py-2`} aria-label="Mensaje" />
             <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-neon text-noche transition active:scale-90 disabled:opacity-40" disabled={!texto.trim()} aria-label="Enviar">
               <Send className="h-4 w-4" />
             </button>
@@ -2346,6 +2563,7 @@ interface FilaMensaje {
   autor: string;
   texto: string;
   hora: string;
+  responde?: Respuesta | null;
 }
 
 type Recordatorios = Record<string, Plan["recordatorios"]>;
@@ -2360,7 +2578,7 @@ async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[];
   ]);
   if (pl.error || co.error || me.error) throw pl.error ?? co.error ?? me.error;
   const mensajes = ((me.data ?? []) as FilaMensaje[]).reverse();
-  const aMensaje = (m: FilaMensaje): Mensaje => ({ id: m.id, autor: m.autor, texto: m.texto, hora: m.hora });
+  const aMensaje = (m: FilaMensaje): Mensaje => ({ id: m.id, autor: m.autor, texto: m.texto, hora: m.hora, ...(m.responde ? { responde: m.responde } : {}) });
   const planes = ((pl.data ?? []) as FilaPlan[]).map((f) => ({
     id: f.id,
     partidoId: f.partido_id,
@@ -2393,9 +2611,11 @@ function ChatEnVivo({
   mensajes: Mensaje[];
   yo: string;
   enLinea: string[];
-  onEnviar: (texto: string) => void;
+  onEnviar: (texto: string, responde?: Respuesta) => void;
 }) {
   const [texto, setTexto] = useState("");
+  const [respondiendo, setRespondiendo] = useState<Respuesta | null>(null);
+  const campo = useRef<HTMLInputElement>(null);
   const fin = useRef<HTMLDivElement>(null);
   useEffect(() => {
     fin.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -2404,8 +2624,9 @@ function ChatEnVivo({
     e.preventDefault();
     const t = texto.trim();
     if (!t) return;
-    onEnviar(t);
+    onEnviar(t, respondiendo ?? undefined);
     setTexto("");
+    setRespondiendo(null);
   };
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -2425,22 +2646,22 @@ function ChatEnVivo({
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3">
         {mensajes.length === 0 && <p className="py-10 text-center text-sm text-white/45">Nadie ha escrito todavía. Di dónde vas a ver el partido.</p>}
-        {mensajes.map((m) => {
-          const mio = m.autor === yo;
-          return (
-            <motion.div key={m.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className={`flex ${mio ? "justify-end" : "justify-start"}`}>
-              <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${mio ? "rounded-br-md bg-neon text-noche" : "rounded-bl-md bg-white/[.08]"}`}>
-                {!mio && <p className="text-[11px] font-extrabold text-oro">{m.autor}</p>}
-                <p className="whitespace-pre-wrap break-words font-medium">{m.texto}</p>
-                <p className={`mt-0.5 text-right text-[10px] ${mio ? "text-noche/60" : "text-white/40"}`}>{fmtHora(m.hora)}</p>
-              </div>
-            </motion.div>
-          );
-        })}
+        {mensajes.map((m) => (
+          <BurbujaChat
+            key={m.id}
+            m={m}
+            mio={m.autor === yo}
+            onResponder={(x) => {
+              setRespondiendo(citar(x));
+              campo.current?.focus();
+            }}
+          />
+        ))}
         <div ref={fin} />
       </div>
+      {respondiendo && <BarraRespuesta r={respondiendo} onCancelar={() => setRespondiendo(null)} />}
       <form onSubmit={enviar} className="flex gap-2 border-t border-white/10 p-3 pb-24 lg:pb-3">
-        <input id="chat-general" value={texto} onChange={(e) => setTexto(e.target.value)} maxLength={500} placeholder="Escribe a todos…" className={`${claseInput} py-2`} aria-label="Mensaje al chat en vivo" />
+        <input ref={campo} id="chat-general" value={texto} onChange={(e) => setTexto(e.target.value)} maxLength={500} placeholder="Escribe a todos…" className={`${claseInput} py-2`} aria-label="Mensaje al chat en vivo" />
         <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-neon text-noche transition active:scale-90 disabled:opacity-40" disabled={!texto.trim()} aria-label="Enviar al chat en vivo">
           <Send className="h-4 w-4" />
         </button>
@@ -3086,12 +3307,14 @@ export default function LaPrevia() {
     if (error && error.code !== "23505") fallo();
   };
 
-  const mandarMensaje = async (sala: string, autor: string, texto: string) => {
-    const m: Mensaje = { id: uid(), autor, texto, hora: new Date().toISOString() };
+  const mandarMensaje = async (sala: string, autor: string, texto: string, responde?: Respuesta) => {
+    const m: Mensaje = { id: uid(), autor, texto, hora: new Date().toISOString(), ...(responde ? { responde } : {}) };
     if (sala === SALA_GENERAL) setGeneral((xs) => [...xs, m]);
     else cambiarPlan(sala, (x) => ({ ...x, chat: [...x.chat, m] }));
     if (!NUBE) return;
-    const { error } = await NUBE.from("mensajes").insert({ sala, autor, texto });
+    let { error } = await NUBE.from("mensajes").insert({ sala, autor, texto, ...(responde ? { responde } : {}) });
+    // Si la base aún no tiene la columna `responde` (schema.sql viejo), se manda sin la cita.
+    if (error && responde && /responde/.test(error.message)) ({ error } = await NUBE.from("mensajes").insert({ sala, autor, texto }));
     if (error) fallo(`Tu mensaje no se envió: ${error.message}`);
   };
 
@@ -3131,7 +3354,7 @@ export default function LaPrevia() {
     vista === "stats" ? (
       <Stats tabla={tabla} onPartidos={() => setVista("partidos")} />
     ) : vista === "chat" ? (
-      <ChatEnVivo mensajes={general} yo={yo} enLinea={enLinea} onEnviar={(t) => conNombre((n) => mandarMensaje(SALA_GENERAL, n, t))} />
+      <ChatEnVivo mensajes={general} yo={yo} enLinea={enLinea} onEnviar={(t, r) => conNombre((n) => mandarMensaje(SALA_GENERAL, n, t, r))} />
     ) : vista === "planes" ? (
       <ListaPlanes planes={planes} partidosPorId={partidosPorId} ahora={ahora} yo={yo} onAbrir={(pl) => (abrirPlan(pl), window.innerWidth < 1024 && setVista("mapa"))} onNuevo={() => empezarPin()} />
     ) : (
@@ -3393,7 +3616,7 @@ export default function LaPrevia() {
             permisoAvisos={permiso}
             onPedirNombre={conNombre}
             onVoy={alternarVoy}
-            onMensaje={(pl, n, t) => mandarMensaje(pl.id, n, t)}
+            onMensaje={(pl, n, t, r) => mandarMensaje(pl.id, n, t, r)}
             onRecordatorios={cambiarRecordatorios}
             onCompartir={compartirPlan}
             onBorrar={borrarPlan}
