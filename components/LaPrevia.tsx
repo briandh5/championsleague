@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useTransform } from "framer-motion";
-import { geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
+import { geoContains, geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature, merge, neighbors } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import type { FeatureCollection, Geometry } from "geojson";
@@ -1194,6 +1194,72 @@ const NOMBRES_PAISES: [string, string, number, number, number][] = [
   ["246", "Finlandia", 26, 63.5, 2.4], ["208", "Dinamarca", 9.3, 56.1, 3.8], ["031", "Azerbaiyán", 47.7, 40.3, 4], ["112", "Bielorrusia", 28, 53.5, 3],
 ];
 
+/* Continentes: vista inicial del mapa. Turquía, Chipre y el Cáucaso van con Europa, como en la UEFA. */
+type ClaveContinente = "na" | "sa" | "eu" | "af" | "as" | "oc" | "an";
+const PAISES_POR_CONTINENTE: Record<Exclude<ClaveContinente, "as">, string[]> = {
+  na: ["Canada", "United States of America", "Mexico", "Greenland", "Bahamas", "Haiti", "Dominican Rep.", "Cuba", "Jamaica", "Puerto Rico", "Panama", "Costa Rica", "Nicaragua", "Honduras", "El Salvador", "Guatemala", "Belize", "Trinidad and Tobago"],
+  sa: ["Argentina", "Chile", "Falkland Is.", "Uruguay", "Brazil", "Bolivia", "Peru", "Colombia", "Venezuela", "Guyana", "Suriname", "Ecuador", "Paraguay"],
+  eu: [
+    "Russia", "Norway", "France", "Sweden", "Belarus", "Ukraine", "Poland", "Austria", "Hungary", "Moldova", "Romania", "Lithuania", "Latvia", "Estonia", "Germany", "Bulgaria", "Greece", "Turkey", "Albania", "Croatia",
+    "Switzerland", "Luxembourg", "Belgium", "Netherlands", "Portugal", "Spain", "Ireland", "Italy", "Denmark", "United Kingdom", "Iceland", "Slovenia", "Finland", "Slovakia", "Czechia", "Bosnia and Herz.", "Macedonia",
+    "Serbia", "Montenegro", "Kosovo", "Cyprus", "N. Cyprus", "Georgia", "Armenia", "Azerbaijan",
+  ],
+  af: [
+    "Tanzania", "W. Sahara", "Dem. Rep. Congo", "Somalia", "Kenya", "Sudan", "Chad", "South Africa", "Lesotho", "Zimbabwe", "Botswana", "Namibia", "Senegal", "Mali", "Mauritania", "Benin", "Niger", "Nigeria", "Cameroon", "Togo",
+    "Ghana", "Côte d'Ivoire", "Guinea", "Guinea-Bissau", "Liberia", "Sierra Leone", "Burkina Faso", "Central African Rep.", "Congo", "Gabon", "Eq. Guinea", "Zambia", "Malawi", "Mozambique", "eSwatini", "Angola", "Burundi",
+    "Madagascar", "Gambia", "Tunisia", "Algeria", "Eritrea", "Morocco", "Egypt", "Libya", "Ethiopia", "Djibouti", "Somaliland", "Uganda", "Rwanda", "S. Sudan",
+  ],
+  oc: ["Fiji", "Papua New Guinea", "Vanuatu", "New Caledonia", "Solomon Is.", "New Zealand", "Australia"],
+  an: ["Antarctica", "Fr. S. Antarctic Lands"],
+};
+const continenteDe = (nombre: string): ClaveContinente =>
+  (Object.entries(PAISES_POR_CONTINENTE).find(([, xs]) => xs.includes(nombre))?.[0] as ClaveContinente | undefined) ?? "as";
+
+/** Nombre, color, dónde va la etiqueta y a qué punto y zoom se acerca al tocarlo. */
+const CONTINENTES: { clave: ClaveContinente; nombre: string; color: string; noche: string; etiqueta: [number, number]; centro: [number, number]; zoom: number }[] = [
+  { clave: "na", nombre: "Norteamérica", color: "#ffb4a2", noche: "#3a2a5e", etiqueta: [-102, 45], centro: [-98, 38], zoom: 2.1 },
+  { clave: "sa", nombre: "Sudamérica", color: "#a8e6a1", noche: "#1f4a4a", etiqueta: [-60, -15], centro: [-62, -20], zoom: 2.4 },
+  { clave: "eu", nombre: "Europa", color: "#bde0fe", noche: "#23306e", etiqueta: [18, 53], centro: [12, 50], zoom: 3.4 },
+  { clave: "af", nombre: "África", color: "#ffd166", noche: "#4a3a1f", etiqueta: [18, 6], centro: [18, 3], zoom: 2.2 },
+  { clave: "as", nombre: "Asia", color: "#f7c8e0", noche: "#4a1f3a", etiqueta: [92, 42], centro: [95, 32], zoom: 1.9 },
+  { clave: "oc", nombre: "Oceanía", color: "#cdb4db", noche: "#33245a", etiqueta: [135, -25], centro: [145, -25], zoom: 2.6 },
+  { clave: "an", nombre: "Antártida", color: "#eef6fb", noche: "#2a3050", etiqueta: [0, -80], centro: [0, -75], zoom: 1 },
+];
+const GEO_CONTINENTES = CONTINENTES.map((c) => ({
+  ...c,
+  geo: merge(TOPO_MUNDO, TOPO_MUNDO.objects.countries.geometries.filter((g) => continenteDe((g.properties as { name?: string } | undefined)?.name ?? "") === c.clave) as Parameters<typeof merge>[1]),
+}));
+/** Por debajo de este zoom efectivo el mapa se ve por continentes; al acercarse aparecen los países. */
+const ZOOM_PAISES = 1.7;
+
+/** País y estado (EE. UU.) del punto, sin internet, con los mismos datos del dibujo. */
+const ESTADOS_EEUU = feature(TOPO_EEUU, TOPO_EEUU.objects.states) as FeatureCollection<Geometry, { name: string }>;
+function lugarSinInternet(lat: number, lng: number): { pais: string; estado: string } {
+  const f = MUNDO.features.find((x) => geoContains(x, [lng, lat]));
+  if (!f) return { pais: "", estado: "" };
+  const id = String(f.id ?? "");
+  const pais = NOMBRES_PAISES.find((n) => n[0] === id)?.[1] ?? f.properties?.name ?? "";
+  const estado = id === ID_EEUU ? ESTADOS_EEUU.features.find((x) => geoContains(x, [lng, lat]))?.properties?.name ?? "" : "";
+  return { pais, estado };
+}
+
+/** Completa país, estado y ciudad del punto con OpenStreetMap (Nominatim), en español. Solo al poner un pin. */
+async function lugarDelPunto(lat: number, lng: number): Promise<{ pais: string; estado: string; ciudad: string } | null> {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&accept-language=es&lat=${lat.toFixed(4)}&lon=${lng.toFixed(4)}`, { signal: AbortSignal.timeout(7000) });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { address?: Record<string, string> };
+    const a = j.address ?? {};
+    return {
+      pais: a.country ?? "",
+      estado: a.state ?? a.region ?? a.province ?? a.county ?? "",
+      ciudad: a.city ?? a.town ?? a.village ?? a.municipality ?? a.county ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Estadio de cada club de la fase de liga (lat, lon). Shakhtar juega en sede neutral, por eso no aparece. */
 const ESTADIOS: Record<string, [number, number]> = {
   ars: [51.5549, -0.1084], avl: [52.5092, -1.8848], liv: [53.4308, -2.9608], mci: [53.4831, -2.2004], mun: [53.4631, -2.2913],
@@ -1471,6 +1537,7 @@ function MapaSvg({
     [camino],
   );
   const esfera = useMemo(() => camino(ESFERA) ?? "", [camino]);
+  const continentes = useMemo(() => GEO_CONTINENTES.map((c) => ({ ...c, d: camino(c.geo) ?? "" })), [camino]);
   const reticula = useMemo(() => camino(geoGraticule10()) ?? "", [camino]);
   const regionesEeuu = useMemo(() => GEO_REGIONES_EEUU.map((r) => ({ ...r, d: camino(r.geo) ?? "" })), [camino]);
   const regionesMexico = useMemo(
@@ -1532,17 +1599,13 @@ function MapaSvg({
     [proy, tam, irA],
   );
 
-  // Vista inicial: el mapa llena el alto en pantallas verticales y se centra en el Atlántico.
+  // Vista inicial: el mundo completo, con todos los continentes a la vista.
   const iniciado = useRef(false);
   useEffect(() => {
     if (!tam.w || iniciado.current) return;
     iniciado.current = true;
-    const b = camino.bounds(ESFERA);
-    const alto = b[1][1] - b[0][1];
-    const k = Math.min(2.2, Math.max(1.3, (tam.h * 0.95) / alto));
-    const p = proy([tam.w < 640 ? -70 : -38, 26]) ?? [tam.w / 2, tam.h / 2];
-    setVista(limitar({ k, x: tam.w / 2 - p[0] * k, y: tam.h / 2 - p[1] * k }));
-  }, [tam, camino, proy, limitar]);
+    setVista({ k: 1, x: 0, y: 0 });
+  }, [tam]);
 
   useEffect(() => {
     if (foco) centrarEn(foco.lng, foco.lat, Math.max(vistaRef.current.k, foco.zoom));
@@ -1623,14 +1686,30 @@ function MapaSvg({
     const p = local(e);
     punteros.current.delete(e.pointerId);
     if (punteros.current.size === 0) gesto.current = null;
-    if (!g || g.movido || !modoPin) return;
+    if (!g || g.movido) return;
     const v = vistaRef.current;
     const coords = proy.invert?.([(p.x - v.x) / v.k, (p.y - v.y) / v.k]);
     if (!coords || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) return;
     const [lng, lat] = coords;
     const vuelta = proy([lng, lat]);
     if (!vuelta || Math.hypot(vuelta[0] - (p.x - v.x) / v.k, vuelta[1] - (p.y - v.y) / v.k) > 1) return; // fuera del globo
-    onElegir(lat, lng);
+    if (modoPin) return onElegir(lat, lng);
+    // Vista por continentes: tocar uno acerca el mapa a esa zona.
+    const escala = Math.min(1, Math.max(tam.w, 1) / 820);
+    if (v.k * escala >= ZOOM_PAISES) return;
+    // Si el toque cae en el mar, gana el continente cuyo nombre quedó más cerca del dedo.
+    const cerca = () => {
+      let mejor: (typeof GEO_CONTINENTES)[number] | undefined;
+      let dist = 70;
+      for (const x of GEO_CONTINENTES) {
+        const q = x.clave === "an" ? null : proy(x.etiqueta);
+        const d = q ? Math.hypot(q[0] * v.k + v.x - p.x, q[1] * v.k + v.y - p.y) : Infinity;
+        if (d < dist) (dist = d), (mejor = x);
+      }
+      return mejor;
+    };
+    const c = GEO_CONTINENTES.find((x) => x.clave !== "an" && geoContains(x.geo, [lng, lat])) ?? cerca();
+    if (c) centrarEn(c.centro[0], c.centro[1], c.zoom / escala);
   };
 
   const color = (pl: Plan) => {
@@ -1653,6 +1732,7 @@ function MapaSvg({
   const k = vista.k;
   // Zoom "efectivo": en pantallas angostas el mundo se dibuja más chico, así que los nombres aparecen más tarde.
   const ke = k * Math.min(1, Math.max(tam.w, 1) / 820);
+  const porContinentes = ke < ZOOM_PAISES;
   const tinta = noche ? "#00f0ff" : "#0b0e28";
   const fondoTexto = noche ? "#0b0e28" : "#ffffff";
   const tamEscudo = k * Math.min(1, Math.max(tam.w, 1) / 820) >= 7 ? 28 : k * Math.min(1, Math.max(tam.w, 1) / 820) >= 4.5 ? 22 : 16;
@@ -1724,6 +1804,23 @@ function MapaSvg({
           <g transform={`translate(${vista.x} ${vista.y}) scale(${k})`}>
             <path d={esfera} fill={noche ? "#0b0e28" : "#7fd3ea"} stroke="#0b0e28" strokeWidth={3} vectorEffect="non-scaling-stroke" />
             <path d={reticula} fill="none" stroke={noche ? "rgba(0,240,255,.12)" : "rgba(255,255,255,.55)"} strokeWidth={1} strokeDasharray="3 4" vectorEffect="non-scaling-stroke" />
+            {porContinentes ? (
+              continentes.map((c) => (
+                <path
+                  key={c.clave}
+                  d={c.d}
+                  fill={noche ? c.noche : c.color}
+                  stroke={tinta}
+                  strokeWidth={2.2}
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                  className={c.clave === "an" || modoPin ? "" : "cursor-pointer transition-[filter] hover:brightness-110"}
+                >
+                  <title>{c.nombre}</title>
+                </path>
+              ))
+            ) : (
+              <>
             {formas.map((f) => (
               <path
                 key={f.id}
@@ -1765,30 +1862,64 @@ function MapaSvg({
             )}
             {espana && <path d={espana.d} fill="none" stroke={tinta} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />}
 
+              </>
+            )}
+
             <path d={esfera} fill="url(#trama)" pointerEvents="none" />
           </g>
 
+          {/* Nombres de continentes (vista inicial) */}
+          {porContinentes &&
+            CONTINENTES.map((c) => {
+              if (c.clave === "an") return null;
+              const s = aPantalla(c.etiqueta[0], c.etiqueta[1]);
+              return visible(s) ? (
+                <text
+                  key={c.clave}
+                  x={s.x}
+                  y={s.y}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontFamily="var(--font-titulo), sans-serif"
+                  fontWeight={800}
+                  fontSize={tam.w < 640 ? 12 : 20}
+                  letterSpacing={tam.w < 640 ? 1.5 : 2.5}
+                  fill={noche ? "#f2c94c" : "#0b0e28"}
+                  stroke={fondoTexto}
+                  strokeWidth={4.5}
+                  paintOrder="stroke"
+                  strokeLinejoin="round"
+                  style={{ textTransform: "uppercase" }}
+                  pointerEvents="none"
+                >
+                  {c.nombre}
+                </text>
+              ) : null;
+            })}
+
           {/* Nombres de países y regiones */}
-          {NOMBRES_PAISES.map(([id, nombre, lon, lat, minK]) => {
+          {!porContinentes && NOMBRES_PAISES.map(([id, nombre, lon, lat, minK]) => {
             if (ke < minK) return null;
             if ((id === ID_MEXICO || id === ID_EEUU) && ke >= 1.8) return null;
             if (id === ID_FRANCIA) return null;
             const s = aPantalla(lon, lat);
             return visible(s) ? etiqueta(nombre, s, "pais") : null;
           })}
-          {ke >= 1.8 &&
+          {!porContinentes &&
+            ke >= 1.8 &&
             REGIONES_EEUU.map((r) => {
               const s = aPantalla(r.lon, r.lat);
               return visible(s) ? etiqueta(r.nombre, s, "region") : null;
             })}
           {REGIONES_MEXICO.map((r) => {
-            if (ke < r.minK) return null;
+            if (porContinentes || ke < r.minK) return null;
             const s = aPantalla(r.lon, r.lat);
             return visible(s) ? etiqueta(r.nombre, s, "region") : null;
           })}
 
           {/* Francia: dos estrellas sobre el escudo del PSG */}
-          {visible(francia, 120) &&
+          {!porContinentes &&
+            visible(francia, 120) &&
             (() => {
               const t = ke >= 2 ? 52 : 40;
               return (
@@ -1857,6 +1988,19 @@ function MapaSvg({
             })()}
         </svg>
       )}
+      <AnimatePresence>
+        {porContinentes && !modoPin && tam.w > 0 && (
+          <motion.p
+            key="pista"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="pointer-events-none absolute inset-x-0 top-[5.5rem] z-10 mx-auto w-max max-w-[70%] rounded-full border-2 border-noche bg-white/95 px-3 py-1.5 text-center text-xs font-bold text-noche shadow-comic"
+          >
+            Toca un continente para acercarte · o pellizca con dos dedos
+          </motion.p>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {ficha &&
           EQUIPOS[ficha] &&
@@ -2223,9 +2367,11 @@ function Hoja({ children, onCerrar, titulo }: { children: React.ReactNode; onCer
     window.addEventListener("keydown", f);
     return () => window.removeEventListener("keydown", f);
   }, [onCerrar]);
+  // En celular, el mismo toque que abre la hoja (p. ej. al clavar un pin) llega después como clic al fondo: lo ignoramos.
+  const abierta = useRef(Date.now());
   return (
     <div className="fixed inset-0 z-[1200] flex items-end justify-center lg:items-stretch lg:justify-end">
-      <motion.div className="absolute inset-0 bg-noche-950/60 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onCerrar} />
+      <motion.div className="absolute inset-0 bg-noche-950/60 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => Date.now() - abierta.current > 450 && onCerrar()} />
       <motion.section
         role="dialog"
         aria-label={titulo}
@@ -2280,9 +2426,28 @@ function FormularioPin({
 }) {
   const disponibles = partidos.filter((p) => p.estado !== "final" && p.local.id !== "tbd").slice(0, 40);
   const [partidoId, setPartidoId] = useState(partidoInicial && disponibles.some((p) => p.id === partidoInicial) ? partidoInicial : disponibles[0]?.id ?? "");
-  const [pais, setPais] = useState("");
-  const [estado, setEstado] = useState("");
+  // País y estado se rellenan al instante desde el dibujo; luego OpenStreetMap afina estado y ciudad.
+  const inicial = useMemo(() => lugarSinInternet(punto.lat, punto.lng), [punto.lat, punto.lng]);
+  const [pais, setPais] = useState(inicial.pais);
+  const [estado, setEstado] = useState(inicial.estado);
   const [ciudad, setCiudad] = useState("");
+  const tocados = useRef({ pais: false, estado: false, ciudad: false });
+  const [detectando, setDetectando] = useState(true);
+  useEffect(() => {
+    let vivo = true;
+    setDetectando(true);
+    lugarDelPunto(punto.lat, punto.lng).then((r) => {
+      if (!vivo) return;
+      setDetectando(false);
+      if (!r) return;
+      if (r.pais && !tocados.current.pais) setPais(r.pais);
+      if (r.estado && !tocados.current.estado) setEstado(r.estado);
+      if (r.ciudad && !tocados.current.ciudad) setCiudad(r.ciudad);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [punto.lat, punto.lng]);
   const [lugar, setLugar] = useState("");
   const [tipo, setTipo] = useState<TipoLugar>("bar");
   const [hashtag, setHashtag] = useState("#");
@@ -2342,16 +2507,19 @@ function FormularioPin({
           </div>
         )}
 
+        <p className="-mb-1 text-xs font-semibold text-white/60">
+          {detectando ? "Detectando ubicación del pin…" : "Llenamos país, estado y ciudad según dónde marcaste. Puedes corregirlos."}
+        </p>
         <div className="grid grid-cols-2 gap-3">
           <Campo etiqueta="País">
-            <input value={pais} onChange={(e) => setPais(e.target.value)} className={claseInput} placeholder="México" />
+            <input value={pais} onChange={(e) => ((tocados.current.pais = true), setPais(e.target.value))} className={claseInput} placeholder="México" />
           </Campo>
           <Campo etiqueta="Estado">
-            <input value={estado} onChange={(e) => setEstado(e.target.value)} className={claseInput} placeholder="Jalisco" />
+            <input value={estado} onChange={(e) => ((tocados.current.estado = true), setEstado(e.target.value))} className={claseInput} placeholder="Jalisco" />
           </Campo>
         </div>
         <Campo etiqueta="Ciudad">
-          <input value={ciudad} onChange={(e) => setCiudad(e.target.value)} className={claseInput} placeholder="Guadalajara" />
+          <input value={ciudad} onChange={(e) => ((tocados.current.ciudad = true), setCiudad(e.target.value))} className={claseInput} placeholder="Guadalajara" />
         </Campo>
 
         <Campo etiqueta="¿Dónde se juntan?">
