@@ -236,7 +236,7 @@ const FASE_LIGA: { jornada: number; dias: [string, string[]][] }[] = [
   {
     jornada: 3,
     dias: [
-      ["2026-10-20", ["fen-sla@18:45", "sab-bvb@18:45", "rom-slo", "por-psv", "liv-vil", "mci-aek", "psg-bar", "nap-bod", "vfb-atm"]],
+      ["2026-10-20", ["fen-sla@18:45=2:2", "sab-bvb@18:45=1:2", "rom-slo=4:0", "por-psv=0:1", "liv-vil=4:3", "mci-aek=5:1", "psg-bar=4:2", "nap-bod=4:3", "vfb-atm=1:1"]],
       ["2026-10-21", ["com-mun@18:45", "lil-gal@18:45", "avl-vik", "cbr-len", "bay-ars", "int-sha", "rma-rbl", "bet-fey", "scp-lask"]],
     ],
   },
@@ -876,16 +876,90 @@ function Posicion({ f }: { f?: FilaTabla }) {
   );
 }
 
-function Stats({ tabla, onPartidos }: { tabla: FilaTabla[]; onPartidos: () => void }) {
+/** Marcador compacto de un partido para el resumen del día en Stats. */
+function FilaDelDia({ p, posiciones }: { p: Partido; posiciones: Map<string, FilaTabla> }) {
+  const jugado = p.estado !== "programado" && p.golesLocal !== undefined;
+  const lado = (eq: Equipo, alinear: "der" | "izq") => (
+    <div className={`flex min-w-0 flex-1 items-center gap-2 ${alinear === "der" ? "flex-row-reverse text-right" : ""}`}>
+      <Escudo equipo={eq} tam={26} />
+      <div className="min-w-0">
+        <p className="truncate text-sm font-bold leading-tight">{eq.nombre}</p>
+        <p className="text-[10px] font-semibold tabular-nums text-white/45">{posiciones.get(eq.id) ? `${posiciones.get(eq.id)!.pos}º` : ""}</p>
+      </div>
+    </div>
+  );
+  return (
+    <li className="border-t border-white/5 px-3 py-2 first:border-t-0">
+      <div className="flex items-center gap-2">
+        {lado(p.local, "izq")}
+        <div className="w-20 shrink-0 text-center">
+          {jugado ? (
+            <p className={`font-display text-xl font-extrabold tabular-nums ${p.estado === "vivo" ? "text-vivo" : "text-white"}`}>
+              {p.golesLocal} - {p.golesVisita}
+            </p>
+          ) : (
+            <p className="font-display text-lg font-bold text-neon">{fmtHora(p.inicio)}</p>
+          )}
+          <p className={`text-[10px] font-extrabold uppercase tracking-wide ${p.estado === "vivo" ? "text-vivo" : "text-white/40"}`}>
+            {p.estado === "vivo" ? (p.minuto ?? "En vivo") : p.estado === "final" ? (jugado ? "Final" : "Sin dato") : "Hoy"}
+          </p>
+        </div>
+        {lado(p.visita, "der")}
+      </div>
+      {p.goles && p.goles.length > 0 && <Goleadores goles={p.goles} />}
+    </li>
+  );
+}
+
+function Stats({ tabla, partidos, ahora, onPartidos }: { tabla: FilaTabla[]; partidos: Partido[]; ahora: number; onPartidos: () => void }) {
   const jugados = tabla.reduce((n, f) => n + f.pj, 0) / 2;
   const cab = "px-1.5 py-2 text-center";
+  // El día del resumen: hoy si hay partidos de liga; si no, la última fecha con resultados.
+  const deLiga = partidos.filter((p) => p.fase === "Fase de liga" && p.local.id !== "tbd");
+  const hoy = claveDia(new Date(ahora).toISOString());
+  const dia =
+    deLiga.some((p) => claveDia(p.inicio) === hoy)
+      ? hoy
+      : [...deLiga].reverse().find((p) => p.estado !== "programado" && p.golesLocal !== undefined && claveDia(p.inicio) < hoy)?.inicio;
+  const claveResumen = dia ? (dia.length === 10 ? dia : claveDia(dia)) : undefined;
+  const delDia = claveResumen ? deLiga.filter((p) => claveDia(p.inicio) === claveResumen) : [];
+  const posiciones = useMemo(() => new Map(tabla.map((f) => [f.equipo.id, f])), [tabla]);
+  // Cuántos lugares subió o bajó cada club con los partidos de ese día.
+  const antes = useMemo(
+    () => new Map(calcularTabla(partidos.filter((p) => claveDia(p.inicio) !== claveResumen)).map((f) => [f.equipo.id, f.pos])),
+    [partidos, claveResumen],
+  );
+  const cuentaDia = delDia.some((p) => p.estado !== "programado" && p.golesLocal !== undefined);
+  const etiquetaDia = claveResumen
+    ? claveResumen === hoy
+      ? "Hoy"
+      : new Date(`${claveResumen}T12:00:00`).toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" }).replace(/^./, (c) => c.toUpperCase())
+    : "";
+  const cambio = (f: FilaTabla) => (antes.get(f.equipo.id) ?? f.pos) - f.pos;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-40 pt-4 lg:pb-6">
       <div className="px-1">
         <h2 className="font-display text-2xl font-extrabold uppercase tracking-wide">Tabla · Fase de liga</h2>
         <p className="text-xs text-white/50">Se actualiza con cada marcador, también en vivo. Los 36 clubes en una sola tabla.</p>
       </div>
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px] font-semibold text-white/60">
+      {delDia.length > 0 && (
+        <section className="mt-3">
+          <div className="flex items-baseline justify-between px-1">
+            <h3 className="font-display text-lg font-extrabold uppercase tracking-wide">
+              {etiquetaDia === "Hoy" ? "Partidos de hoy" : `Última fecha · ${etiquetaDia}`}
+            </h3>
+            <span className="text-[11px] font-semibold text-white/45">
+              {delDia.filter((p) => p.estado === "final" && p.golesLocal !== undefined).length}/{delDia.length} terminados
+            </span>
+          </div>
+          <ul className="mt-2 overflow-hidden rounded-2xl border border-white/10 bg-noche-800/80">
+            {delDia.map((p) => (
+              <FilaDelDia key={p.id} p={p} posiciones={posiciones} />
+            ))}
+          </ul>
+        </section>
+      )}
+      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px] font-semibold text-white/60">
         {(
           [
             ["octavos", "1-8 Octavos"],
@@ -920,6 +994,11 @@ function Stats({ tabla, onPartidos }: { tabla: FilaTabla[]; onPartidos: () => vo
                 <tr key={f.equipo.id} className={`border-t border-white/5 ${f.pos === 8 || f.pos === 24 ? "border-b-2 border-b-white/25" : ""}`}>
                   <td className="py-1.5 text-center font-display text-base font-bold tabular-nums" style={{ boxShadow: `inset 3px 0 0 ${COLOR_ZONA[z]}` }}>
                     {f.pos}
+                    {cuentaDia && cambio(f) !== 0 && (
+                      <span className={`block text-[9px] font-extrabold leading-none ${cambio(f) > 0 ? "text-[#2ee6a6]" : "text-[#ff4d6d]"}`}>
+                        {cambio(f) > 0 ? `▲${cambio(f)}` : `▼${-cambio(f)}`}
+                      </span>
+                    )}
                   </td>
                   <td className="px-1.5 py-1.5">
                     <div className="flex min-w-0 items-center gap-2">
@@ -940,7 +1019,7 @@ function Stats({ tabla, onPartidos }: { tabla: FilaTabla[]; onPartidos: () => vo
         </table>
       </div>
       <p className="mt-3 px-1 text-[11px] text-white/40">
-        {jugados} partidos contados. Desempate: puntos, diferencia de gol y goles a favor. La tabla oficial de uefa.com puede aplicar criterios adicionales.
+        {jugados} partidos contados.{cuentaDia && " ▲▼ = lugares que cambió cada club con los partidos de esa fecha."} Desempate: puntos, diferencia de gol y goles a favor. La tabla oficial de uefa.com puede aplicar criterios adicionales.
       </p>
       <button onClick={onPartidos} className="mt-3 w-full rounded-xl bg-white/[.06] py-2.5 text-sm font-bold text-white/80 active:scale-[.98]">
         Ver partidos
@@ -3983,7 +4062,7 @@ export default function LaPrevia() {
 
   const panelLateral =
     vista === "stats" ? (
-      <Stats tabla={tabla} onPartidos={() => setVista("partidos")} />
+      <Stats tabla={tabla} partidos={partidos} ahora={ahora} onPartidos={() => setVista("partidos")} />
     ) : vista === "chat" ? (
       <ChatEnVivo mensajes={general} yo={yo} enLinea={enLinea} acciones={accionesPara(SALA_GENERAL, conNombre)} />
     ) : vista === "planes" ? (
