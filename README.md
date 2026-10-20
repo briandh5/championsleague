@@ -4,7 +4,7 @@ App #4 del reto de 100 apps. Coordina con tus amigos dónde ver cada partido de 
 Champions: mapa ilustrado con pines y hashtags, calendario por fases con marcador en vivo,
 recordatorios, compartir plan, Google Calendar y chat rápido por evento.
 
-**Stack:** Next.js 15 (App Router) · TypeScript · Tailwind CSS 3 · Leaflet (react-leaflet) ·
+**Stack:** Next.js 15 (App Router) · TypeScript · Tailwind CSS 3 · SVG con d3-geo ·
 Framer Motion · Lucide. Toda la interfaz vive en un solo componente:
 [`components/LaPrevia.tsx`](components/LaPrevia.tsx).
 
@@ -12,8 +12,8 @@ Framer Motion · Lucide. Toda la interfaz vive en un solo componente:
 
 | Parte | Detalle |
 | --- | --- |
-| Mapa caricatura | Leaflet con CartoDB Voyager saturado y trama de puntos tipo cómic. Botón para cambiar a mapa de noche. |
-| Pin personalizado | "Poner mi pin" → tocas el mapa (o "Aquí estoy" con tu ubicación) → formulario con partido, País, Estado, Ciudad (se prellenan con OpenStreetMap), tipo de lugar, nombre del lugar, `#Hashtag` único y anfitrión. |
+| Mapa caricatura | Dibujo SVG del mundo (países de Natural Earth incluidos en la app, sin APIs ni mosaicos). Se arrastra y se acerca con rueda, pellizco o botones. Botón para cambiar a mapa de noche. |
+| Pin personalizado | "Poner mi pin" → tocas el dibujo donde quieras (no usa tu ubicación) → formulario con partido, País, Estado, Ciudad, tipo de lugar, nombre del lugar, `#Hashtag` único y anfitrión. |
 | Buscador flotante | Filtra los pines por hashtag, nombre de amigo, lugar o ciudad. Muestra los hashtags más populares. |
 | Calendario | Fases (Fase de liga, Play-off, Octavos, Cuartos, Semifinal, Final), tira de días y tarjetas con escudos, estado **En vivo** con marcador y minuto o **Próximamente** con hora local. |
 | Recordatorios | 1 día y 1 hora antes, configurables por plan. Aviso dentro de la app y notificación del navegador. El botón **.ics** descarga el evento con las dos alarmas para que lleguen aunque la app esté cerrada. |
@@ -23,18 +23,21 @@ Framer Motion · Lucide. Toda la interfaz vive en un solo componente:
 
 ## Datos
 
-- `app/api/partidos/route.ts` pide los partidos de la Champions a **TheSportsDB** (gratis).
-  Si responde con 8 partidos o más, la app los usa y muestra "Datos en vivo".
-  Con la llave gratuita llegan pocos partidos, así que normalmente verás el
-  **calendario de ejemplo 2026/27** con marcador simulado (etiqueta "Datos de ejemplo").
-  Con una llave propia de TheSportsDB pon la variable `THESPORTSDB_KEY` en Vercel.
+- **Calendario oficial UEFA 2026/27** tomado de uefa.com: los 144 partidos de la fase de liga
+  (36 clubes, 8 jornadas) con fecha y hora, resultados de las jornadas 1 y 2, y las fechas de
+  play-off, octavos, cuartos, semifinales y la final (5 de junio de 2027, Metropolitano). Vive en
+  `FASE_LIGA` dentro del componente; para cargar un resultado nuevo se agrega `=goles:goles` al cruce.
+- El estado (Próximamente / En vivo / Final) se calcula con la hora del partido. El marcador en vivo
+  se toma de **TheSportsDB** (`app/api/partidos/route.ts`) cuando responde; si no, la tarjeta dice
+  "en juego" o "resultado pendiente" sin inventar marcador. Con una llave propia de TheSportsDB pon
+  `THESPORTSDB_KEY` en Vercel.
 - Escudos en alta resolución desde el CDN de API-Football; si alguno no carga se dibuja un
   escudo con los colores del club.
 - Pines, confirmados, chat y tu nombre se guardan en el navegador (LocalStorage). Para chat
   entre varias personas en tiempo real el siguiente paso es conectar Supabase Realtime.
 
 **Modo demo:** abre `/?demo=vivo` para adelantar el reloj al siguiente partido y ver
-el marcador en vivo.
+un marcador en vivo simulado.
 
 ## Correr en local
 

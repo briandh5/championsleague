@@ -8,8 +8,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import L from "leaflet";
-import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from "react-leaflet";
+import { geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
+import { feature } from "topojson-client";
+import type { GeometryCollection, Topology } from "topojson-specification";
+import type { FeatureCollection, Geometry } from "geojson";
+import mundoTopo from "world-atlas/countries-110m.json";
 import {
   Bell,
   BellRing,
@@ -24,10 +27,11 @@ import {
   Home,
   Layers,
   ListChecks,
-  LocateFixed,
+  Globe2,
   Map as MapaIcon,
   MapPin,
   MessageCircle,
+  Minus,
   Plus,
   Radio,
   Search,
@@ -100,7 +104,7 @@ interface Plan {
 }
 
 type Vista = "mapa" | "partidos" | "planes";
-type Fuente = "cargando" | "real" | "ejemplo";
+type Fuente = "oficial" | "envivo" | "demo";
 
 interface Aviso {
   id: string;
@@ -109,45 +113,61 @@ interface Aviso {
   tono?: "neon" | "oro" | "vivo";
 }
 
-/* ─────────────────────── Datos de ejemplo (capa de datos) ─────────────────────── */
+/* ─────────────────── Calendario oficial UEFA 2026/27 (capa de datos) ─────────────────── */
 
 const FASES: Fase[] = ["Fase de liga", "Play-off", "Octavos", "Cuartos", "Semifinal", "Final"];
 
 // Escudos en alta resolución desde el CDN público de API-Football; si alguno falla se dibuja un escudo con los colores del club.
 const esc = (id: number) => `https://media.api-sports.io/football/teams/${id}.png`;
 
-const EQUIPOS: Equipo[] = [
-  { id: "rma", nombre: "Real Madrid", corto: "RMA", pais: "ESP", escudo: esc(541), colores: ["#ffffff", "#febe10"], estadio: "Santiago Bernabéu", ciudad: "Madrid" },
-  { id: "bar", nombre: "Barcelona", corto: "BAR", pais: "ESP", escudo: esc(529), colores: ["#a50044", "#004d98"], estadio: "Spotify Camp Nou", ciudad: "Barcelona" },
-  { id: "atm", nombre: "Atlético de Madrid", corto: "ATM", pais: "ESP", escudo: esc(530), colores: ["#cb3524", "#272e61"], estadio: "Metropolitano", ciudad: "Madrid" },
-  { id: "ath", nombre: "Athletic Club", corto: "ATH", pais: "ESP", escudo: esc(531), colores: ["#ee2523", "#ffffff"], estadio: "San Mamés", ciudad: "Bilbao" },
-  { id: "vil", nombre: "Villarreal", corto: "VIL", pais: "ESP", escudo: esc(533), colores: ["#ffe667", "#005187"], estadio: "La Cerámica", ciudad: "Villarreal" },
-  { id: "mci", nombre: "Manchester City", corto: "MCI", pais: "ENG", escudo: esc(50), colores: ["#6cabdd", "#1c2c5b"], estadio: "Etihad Stadium", ciudad: "Mánchester" },
-  { id: "liv", nombre: "Liverpool", corto: "LIV", pais: "ENG", escudo: esc(40), colores: ["#c8102e", "#00b2a9"], estadio: "Anfield", ciudad: "Liverpool" },
-  { id: "ars", nombre: "Arsenal", corto: "ARS", pais: "ENG", escudo: esc(42), colores: ["#ef0107", "#063672"], estadio: "Emirates Stadium", ciudad: "Londres" },
-  { id: "che", nombre: "Chelsea", corto: "CHE", pais: "ENG", escudo: esc(49), colores: ["#034694", "#dba111"], estadio: "Stamford Bridge", ciudad: "Londres" },
-  { id: "tot", nombre: "Tottenham", corto: "TOT", pais: "ENG", escudo: esc(47), colores: ["#132257", "#ffffff"], estadio: "Tottenham Hotspur Stadium", ciudad: "Londres" },
-  { id: "new", nombre: "Newcastle", corto: "NEW", pais: "ENG", escudo: esc(34), colores: ["#241f20", "#ffffff"], estadio: "St James' Park", ciudad: "Newcastle" },
-  { id: "bay", nombre: "Bayern Múnich", corto: "BAY", pais: "GER", escudo: esc(157), colores: ["#dc052d", "#0066b2"], estadio: "Allianz Arena", ciudad: "Múnich" },
-  { id: "bvb", nombre: "Borussia Dortmund", corto: "BVB", pais: "GER", escudo: esc(165), colores: ["#fde100", "#000000"], estadio: "Signal Iduna Park", ciudad: "Dortmund" },
-  { id: "b04", nombre: "Bayer Leverkusen", corto: "B04", pais: "GER", escudo: esc(168), colores: ["#e32221", "#000000"], estadio: "BayArena", ciudad: "Leverkusen" },
-  { id: "sge", nombre: "Eintracht Frankfurt", corto: "SGE", pais: "GER", escudo: esc(169), colores: ["#e1000f", "#000000"], estadio: "Deutsche Bank Park", ciudad: "Fráncfort" },
-  { id: "psg", nombre: "Paris Saint-Germain", corto: "PSG", pais: "FRA", escudo: esc(85), colores: ["#004170", "#da291c"], estadio: "Parc des Princes", ciudad: "París" },
-  { id: "om", nombre: "Olympique de Marsella", corto: "OM", pais: "FRA", escudo: esc(81), colores: ["#2faee0", "#ffffff"], estadio: "Vélodrome", ciudad: "Marsella" },
-  { id: "asm", nombre: "AS Monaco", corto: "ASM", pais: "FRA", escudo: esc(91), colores: ["#e51b22", "#ffffff"], estadio: "Stade Louis II", ciudad: "Mónaco" },
-  { id: "int", nombre: "Inter", corto: "INT", pais: "ITA", escudo: esc(505), colores: ["#0068a8", "#000000"], estadio: "San Siro", ciudad: "Milán" },
-  { id: "mil", nombre: "AC Milan", corto: "MIL", pais: "ITA", escudo: esc(489), colores: ["#fb090b", "#000000"], estadio: "San Siro", ciudad: "Milán" },
-  { id: "juv", nombre: "Juventus", corto: "JUV", pais: "ITA", escudo: esc(496), colores: ["#000000", "#ffffff"], estadio: "Allianz Stadium", ciudad: "Turín" },
-  { id: "nap", nombre: "Napoli", corto: "NAP", pais: "ITA", escudo: esc(492), colores: ["#12a0d7", "#ffffff"], estadio: "Diego Armando Maradona", ciudad: "Nápoles" },
-  { id: "ata", nombre: "Atalanta", corto: "ATA", pais: "ITA", escudo: esc(499), colores: ["#1e71b8", "#000000"], estadio: "Gewiss Stadium", ciudad: "Bérgamo" },
-  { id: "ben", nombre: "Benfica", corto: "BEN", pais: "POR", escudo: esc(211), colores: ["#e83030", "#ffffff"], estadio: "Estádio da Luz", ciudad: "Lisboa" },
-  { id: "por", nombre: "Porto", corto: "POR", pais: "POR", escudo: esc(212), colores: ["#00428c", "#ffffff"], estadio: "Estádio do Dragão", ciudad: "Oporto" },
-  { id: "scp", nombre: "Sporting CP", corto: "SCP", pais: "POR", escudo: esc(228), colores: ["#008057", "#ffffff"], estadio: "José Alvalade", ciudad: "Lisboa" },
-  { id: "psv", nombre: "PSV", corto: "PSV", pais: "NED", escudo: esc(197), colores: ["#ed1c24", "#ffffff"], estadio: "Philips Stadion", ciudad: "Eindhoven" },
-  { id: "aja", nombre: "Ajax", corto: "AJA", pais: "NED", escudo: esc(194), colores: ["#d2122e", "#ffffff"], estadio: "Johan Cruijff ArenA", ciudad: "Ámsterdam" },
-  { id: "bru", nombre: "Club Brujas", corto: "BRU", pais: "BEL", escudo: esc(569), colores: ["#0067ce", "#000000"], estadio: "Jan Breydel", ciudad: "Brujas" },
-  { id: "gal", nombre: "Galatasaray", corto: "GAL", pais: "TUR", escudo: esc(645), colores: ["#a90432", "#fdb912"], estadio: "RAMS Park", ciudad: "Estambul" },
+type FilaEquipo = [id: string, nombre: string, corto: string, pais: string, escudo: number | null, c1: string, c2: string, estadio: string, ciudad: string];
+
+// Los 36 clubes de la fase de liga 2026/27 según uefa.com.
+const FILAS_EQUIPOS: FilaEquipo[] = [
+  ["ars", "Arsenal", "ARS", "ENG", 42, "#ef0107", "#063672", "Emirates Stadium", "Londres"],
+  ["avl", "Aston Villa", "AVL", "ENG", 66, "#670e36", "#95bfe5", "Villa Park", "Birmingham"],
+  ["liv", "Liverpool", "LIV", "ENG", 40, "#c8102e", "#00b2a9", "Anfield", "Liverpool"],
+  ["mci", "Manchester City", "MCI", "ENG", 50, "#6cabdd", "#1c2c5b", "Etihad Stadium", "Mánchester"],
+  ["mun", "Manchester United", "MUN", "ENG", 33, "#da291c", "#000000", "Old Trafford", "Mánchester"],
+  ["len", "Lens", "RCL", "FRA", 116, "#ffd700", "#e30613", "Stade Bollaert-Delelis", "Lens"],
+  ["lil", "Lille", "LIL", "FRA", 79, "#e01e13", "#0d1e3f", "Stade Pierre-Mauroy", "Lille"],
+  ["psg", "Paris Saint-Germain", "PSG", "FRA", 85, "#004170", "#da291c", "Parc des Princes", "París"],
+  ["bay", "Bayern München", "BAY", "GER", 157, "#dc052d", "#0066b2", "Allianz Arena", "Múnich"],
+  ["bvb", "Borussia Dortmund", "BVB", "GER", 165, "#fde100", "#000000", "Signal Iduna Park", "Dortmund"],
+  ["rbl", "Leipzig", "RBL", "GER", 173, "#dd0741", "#ffffff", "Red Bull Arena", "Leipzig"],
+  ["vfb", "Stuttgart", "VFB", "GER", 172, "#e32219", "#ffffff", "MHPArena", "Stuttgart"],
+  ["int", "Inter", "INT", "ITA", 505, "#0068a8", "#000000", "San Siro", "Milán"],
+  ["nap", "Napoli", "NAP", "ITA", 492, "#12a0d7", "#ffffff", "Diego Armando Maradona", "Nápoles"],
+  ["rom", "Roma", "ROM", "ITA", 497, "#8e1f2f", "#f0bc42", "Stadio Olimpico", "Roma"],
+  ["com", "Como", "COM", "ITA", 895, "#1b3d8f", "#ffffff", "Giuseppe Sinigaglia", "Como"],
+  ["fey", "Feyenoord", "FEY", "NED", 209, "#e30613", "#ffffff", "De Kuip", "Róterdam"],
+  ["psv", "PSV Eindhoven", "PSV", "NED", 197, "#ed1c24", "#ffffff", "Philips Stadion", "Eindhoven"],
+  ["bod", "Bodø/Glimt", "BOD", "NOR", 327, "#ffd200", "#000000", "Aspmyra Stadion", "Bodø"],
+  ["vik", "Viking", "VIK", "NOR", null, "#003b7b", "#ffffff", "Viking Stadion", "Stavanger"],
+  ["por", "Porto", "POR", "POR", 212, "#00428c", "#ffffff", "Estádio do Dragão", "Oporto"],
+  ["scp", "Sporting CP", "SCP", "POR", 228, "#008057", "#ffffff", "José Alvalade", "Lisboa"],
+  ["slo", "Slovan Bratislava", "SLO", "SVK", null, "#0058a3", "#ffffff", "Tehelné pole", "Bratislava"],
+  ["atm", "Atlético de Madrid", "ATM", "ESP", 530, "#cb3524", "#272e61", "Metropolitano", "Madrid"],
+  ["bar", "Barcelona", "BAR", "ESP", 529, "#a50044", "#004d98", "Spotify Camp Nou", "Barcelona"],
+  ["bet", "Real Betis", "BET", "ESP", 543, "#00954c", "#ffffff", "Benito Villamarín", "Sevilla"],
+  ["rma", "Real Madrid", "RMA", "ESP", 541, "#ffffff", "#febe10", "Santiago Bernabéu", "Madrid"],
+  ["vil", "Villarreal", "VIL", "ESP", 533, "#ffe667", "#005187", "La Cerámica", "Villarreal"],
+  ["fen", "Fenerbahçe", "FEN", "TUR", 611, "#163962", "#ffed00", "Şükrü Saracoğlu", "Estambul"],
+  ["gal", "Galatasaray", "GAL", "TUR", 645, "#a90432", "#fdb912", "RAMS Park", "Estambul"],
+  ["sha", "Shakhtar Donetsk", "SHA", "UKR", 550, "#f26522", "#000000", "Sede por confirmar", ""],
+  ["cbr", "Club Brugge", "BRU", "BEL", 569, "#0067ce", "#000000", "Jan Breydel", "Brujas"],
+  ["sla", "Slavia Praha", "SLA", "CZE", 560, "#c8102e", "#ffffff", "Fortuna Arena", "Praga"],
+  ["aek", "AEK Athens", "AEK", "GRE", 575, "#ffd200", "#000000", "OPAP Arena", "Atenas"],
+  ["lask", "LASK", "LASK", "AUT", null, "#000000", "#ffffff", "Raiffeisen Arena", "Linz"],
+  ["sab", "Sabah", "SAB", "AZE", null, "#ff6600", "#1b2a5c", "Bank Respublika Arena", "Bakú"],
 ];
+
+const EQUIPOS: Record<string, Equipo> = Object.fromEntries(
+  FILAS_EQUIPOS.map(([id, nombre, corto, pais, escudo, c1, c2, estadio, ciudad]) => [
+    id,
+    { id, nombre, corto, pais, escudo: escudo ? esc(escudo) : undefined, colores: [c1, c2] as [string, string], estadio, ciudad },
+  ]),
+);
 
 const POR_DEFINIR: Equipo = {
   id: "tbd",
@@ -167,76 +187,117 @@ function horaMadrid(fecha: string, hora: string): string {
   return new Date(Date.UTC(y, m - 1, d, hh - (verano ? 2 : 1), mm)).toISOString();
 }
 
-const JORNADAS: { n: number; dias: string[] }[] = [
-  { n: 1, dias: ["2026-09-15", "2026-09-16"] },
-  { n: 2, dias: ["2026-09-29", "2026-09-30"] },
-  { n: 3, dias: ["2026-10-20", "2026-10-21"] },
-  { n: 4, dias: ["2026-11-03", "2026-11-04"] },
-  { n: 5, dias: ["2026-11-24", "2026-11-25"] },
-  { n: 6, dias: ["2026-12-08", "2026-12-09"] },
-  { n: 7, dias: ["2027-01-19", "2027-01-20"] },
-  { n: 8, dias: ["2027-01-27"] },
+/**
+ * Fase de liga 2026/27 tal como la publica uefa.com (horario de Madrid).
+ * Formato: "local-visita" (21:00), "local-visita@18:45", o "local-visita=2:1" con resultado.
+ */
+const FASE_LIGA: { jornada: number; dias: [string, string[]][] }[] = [
+  {
+    jornada: 1,
+    dias: [
+      ["2026-09-08", ["aek-lask=1:0", "cbr-avl=2:3", "bvb-vil=3:2", "por-mci=0:2", "lil-bet=2:3", "rma-int=2:1"]],
+      ["2026-09-09", ["bar-fey=5:1", "vfb-vik=3:1", "liv-atm=2:1", "psg-slo=6:1", "scp-gal=3:1", "nap-ars=0:1"]],
+      ["2026-09-10", ["fen-rom=1:1", "psv-sha=1:1", "com-rbl=4:1", "bay-bod=5:0", "mun-sab=4:0", "sla-len=2:3"]],
+    ],
+  },
+  {
+    jornada: 2,
+    dias: [
+      ["2026-10-13", ["len-scp=0:2", "sab-sla=2:0", "ars-lil=3:0", "atm-mun=2:0", "int-cbr=3:4", "gal-bar=1:4", "rbl-psv=1:0", "vik-bay=3:3", "vil-nap=3:1"]],
+      ["2026-10-14", ["fey-com=3:2", "lask-liv=3:6", "rom-rma=3:4", "avl-fen=6:0", "sha-aek=3:1", "bod-bvb=1:0", "mci-psg=2:4", "bet-por=3:2", "slo-vfb=0:3"]],
+    ],
+  },
+  {
+    jornada: 3,
+    dias: [
+      ["2026-10-20", ["fen-sla@18:45", "sab-bvb@18:45", "rom-slo", "por-psv", "liv-vil", "mci-aek", "psg-bar", "nap-bod", "vfb-atm"]],
+      ["2026-10-21", ["com-mun@18:45", "lil-gal@18:45", "avl-vik", "cbr-len", "bay-ars", "int-sha", "rma-rbl", "bet-fey", "scp-lask"]],
+    ],
+  },
+  {
+    jornada: 4,
+    dias: [
+      ["2026-11-03", ["sha-scp@18:45", "gal-vfb@18:45", "atm-bay", "bar-avl", "fey-int", "bod-lil", "lask-slo", "mun-rom", "vil-psg"]],
+      ["2026-11-04", ["aek-rma@18:45", "fen-liv@18:45", "bvb-bet", "por-nap", "psv-cbr", "rbl-mci", "len-com", "sla-ars", "vik-sab"]],
+    ],
+  },
+  {
+    jornada: 5,
+    dias: [
+      ["2026-11-24", ["bod-lask@18:45", "gal-avl@18:45", "ars-bvb", "com-aek", "fey-por", "mci-nap", "rbl-len", "rma-psv", "slo-bet"]],
+      ["2026-11-25", ["sab-bar@18:45", "sla-vil@18:45", "atm-vik", "cbr-liv", "int-vfb", "sha-fen", "lil-bay", "psg-rom", "scp-mun"]],
+    ],
+  },
+  {
+    jornada: 6,
+    dias: [
+      ["2026-12-08", ["vik-fey@18:45", "vil-sab@18:45", "aek-gal", "rom-scp", "avl-psg", "bar-mci", "bay-sla", "mun-rbl", "nap-cbr"]],
+      ["2026-12-09", ["bet-com@18:45", "slo-sha@18:45", "ars-rma", "bvb-int", "lask-fen", "liv-por", "len-bod", "psv-atm", "vfb-lil"]],
+    ],
+  },
+  {
+    jornada: 7,
+    dias: [
+      ["2027-01-19", ["bod-atm@18:45", "gal-fey@18:45", "aek-rom", "avl-bvb", "int-liv", "por-sla", "lil-slo", "rma-lask", "vfb-cbr"]],
+      ["2027-01-20", ["fen-vil@18:45", "sab-nap@18:45", "com-psg", "mun-bay", "rbl-sha", "len-mci", "bet-ars", "scp-bar", "vik-psv"]],
+    ],
+  },
+  {
+    jornada: 8,
+    dias: [
+      [
+        "2027-01-27",
+        ["ars-sab", "rom-lil", "atm-fen", "bvb-aek", "cbr-bod", "bay-bet", "bar-com", "sha-rma", "fey-rbl", "lask-por", "liv-len", "mci-scp", "psg-gal", "psv-vfb", "sla-avl", "nap-vik", "vil-mun", "slo-int"],
+      ],
+    ],
+  },
 ];
 
+// Eliminatorias: fechas oficiales; los cruces se conocen tras cada sorteo.
 const ELIMINATORIAS: { fase: Fase; ronda: string; dias: string[]; porDia: number }[] = [
-  { fase: "Play-off", ronda: "Ida", dias: ["2027-02-16", "2027-02-17"], porDia: 2 },
-  { fase: "Play-off", ronda: "Vuelta", dias: ["2027-02-23", "2027-02-24"], porDia: 2 },
-  { fase: "Octavos", ronda: "Ida", dias: ["2027-03-09", "2027-03-10"], porDia: 2 },
-  { fase: "Octavos", ronda: "Vuelta", dias: ["2027-03-16", "2027-03-17"], porDia: 2 },
+  { fase: "Play-off", ronda: "Ida", dias: ["2027-02-16", "2027-02-17"], porDia: 4 },
+  { fase: "Play-off", ronda: "Vuelta", dias: ["2027-02-23", "2027-02-24"], porDia: 4 },
+  { fase: "Octavos", ronda: "Ida", dias: ["2027-03-09", "2027-03-10"], porDia: 4 },
+  { fase: "Octavos", ronda: "Vuelta", dias: ["2027-03-16", "2027-03-17"], porDia: 4 },
   { fase: "Cuartos", ronda: "Ida", dias: ["2027-04-06", "2027-04-07"], porDia: 2 },
   { fase: "Cuartos", ronda: "Vuelta", dias: ["2027-04-13", "2027-04-14"], porDia: 2 },
   { fase: "Semifinal", ronda: "Ida", dias: ["2027-04-27", "2027-04-28"], porDia: 1 },
   { fase: "Semifinal", ronda: "Vuelta", dias: ["2027-05-04", "2027-05-05"], porDia: 1 },
 ];
 
-/** Calendario de ejemplo de la temporada 2026/27 (fase de liga por método de rotación, sin repetir cruces). */
-function calendarioEjemplo(): Partido[] {
+function calendarioOficial(): Partido[] {
   const partidos: Partido[] = [];
-  const n = EQUIPOS.length;
-  for (const j of JORNADAS) {
-    const r = j.n - 1;
-    const resto = EQUIPOS.slice(1);
-    const rotados = [...resto.slice(r % resto.length), ...resto.slice(0, r % resto.length)];
-    const lista = [EQUIPOS[0], ...rotados];
-    const cruces: [Equipo, Equipo][] = [];
-    for (let i = 0; i < n / 2; i++) {
-      const a = lista[i];
-      const b = lista[n - 1 - i];
-      cruces.push((r + i) % 2 ? [b, a] : [a, b]);
-    }
-    cruces.forEach(([local, visita], i) => {
-      let dia: string;
-      let hora: string;
-      if (j.dias.length === 1) {
-        dia = j.dias[0];
-        hora = "21:00";
-      } else {
-        const primerDia = i < 7;
-        dia = primerDia ? j.dias[0] : j.dias[1];
-        const k = primerDia ? i : i - 7;
-        hora = k < 2 ? "18:45" : "21:00";
+  for (const j of FASE_LIGA) {
+    for (const [dia, cruces] of j.dias) {
+      for (const txt of cruces) {
+        const [, l, v, hora = "21:00", gl, gv] = /^([a-z]+)-([a-z]+)(?:@(\d\d:\d\d))?(?:=(\d+):(\d+))?$/.exec(txt) ?? [];
+        const local = EQUIPOS[l];
+        const visita = EQUIPOS[v];
+        if (!local || !visita) continue;
+        partidos.push({
+          id: `j${j.jornada}-${l}-${v}`,
+          fase: "Fase de liga",
+          jornada: `Jornada ${j.jornada}`,
+          inicio: horaMadrid(dia, hora),
+          local,
+          visita,
+          estadio: local.estadio,
+          ciudad: local.ciudad,
+          estado: gl !== undefined ? "final" : "programado",
+          golesLocal: gl !== undefined ? Number(gl) : undefined,
+          golesVisita: gv !== undefined ? Number(gv) : undefined,
+        });
       }
-      partidos.push({
-        id: `j${j.n}-${local.id}-${visita.id}`,
-        fase: "Fase de liga",
-        jornada: `Jornada ${j.n}`,
-        inicio: horaMadrid(dia, hora),
-        local,
-        visita,
-        estadio: local.estadio,
-        ciudad: local.ciudad,
-        estado: "programado",
-      });
-    });
+    }
   }
   for (const e of ELIMINATORIAS) {
-    e.dias.forEach((dia) => {
+    for (const dia of e.dias) {
       for (let k = 0; k < e.porDia; k++) {
         partidos.push({
           id: `${e.fase}-${e.ronda}-${dia}-${k}`.toLowerCase().replace(/\s+/g, "-"),
           fase: e.fase,
           jornada: e.ronda,
-          inicio: horaMadrid(dia, k === 0 && e.porDia > 1 ? "18:45" : "21:00"),
+          inicio: horaMadrid(dia, "21:00"),
           local: POR_DEFINIR,
           visita: POR_DEFINIR,
           estadio: "Por definir",
@@ -244,20 +305,20 @@ function calendarioEjemplo(): Partido[] {
           estado: "programado",
         });
       }
-    });
+    }
   }
   partidos.push({
     id: "final-2027",
     fase: "Final",
     jornada: "Final",
-    inicio: horaMadrid("2027-05-29", "18:00"),
+    inicio: horaMadrid("2027-06-05", "21:00"),
     local: POR_DEFINIR,
     visita: POR_DEFINIR,
     estadio: "Estadio Metropolitano",
     ciudad: "Madrid",
     estado: "programado",
   });
-  return partidos.sort((a, b) => a.inicio.localeCompare(b.inicio));
+  return partidos.sort((a, b) => a.inicio.localeCompare(b.inicio) || a.id.localeCompare(b.id));
 }
 
 function hash(s: string): number {
@@ -269,29 +330,42 @@ function hash(s: string): number {
   return h >>> 0;
 }
 
-/** Simula el marcador del calendario de ejemplo según la hora actual (determinista: todos ven lo mismo). */
-function simular(p: Partido, ahora: number): Partido {
+/**
+ * Estado del partido según la hora: programado, en juego (con minuto) o terminado.
+ * El marcador sale del resultado oficial o de la fuente en vivo; solo en modo demo se simula.
+ */
+function conEstado(p: Partido, ahora: number, demo: boolean): Partido {
+  if (p.estado === "final" && p.golesLocal !== undefined) return p;
   const t = (ahora - Date.parse(p.inicio)) / 60000;
-  if (t < 0) return { ...p, estado: "programado", golesLocal: undefined, golesVisita: undefined, minuto: undefined };
+  if (t < 0) return { ...p, estado: "programado", minuto: undefined };
+  if (t >= 112) {
+    if (!demo) return { ...p, estado: "final", minuto: undefined };
+  }
+  const jugado = t <= 47 ? t : t < 62 ? 45 : Math.min(45 + (t - 62), 95);
+  const minuto =
+    t >= 112 ? undefined : t <= 47 ? (t > 45 ? "45+" : `${Math.floor(t) + 1}'`) : t < 62 ? "Descanso" : jugado > 90 ? "90+" : `${Math.floor(jugado) + 1}'`;
+  const estado: Partido["estado"] = t >= 112 ? "final" : "vivo";
+  if (!demo || p.local.id === "tbd") return { ...p, estado, minuto };
   const h = hash(p.id);
   const totalL = [0, 1, 1, 2, 2, 3, 1, 0, 2, 4][h % 10];
   const totalV = [0, 1, 0, 1, 2, 1, 3, 0, 1, 2][(h >>> 4) % 10];
-  const minutos = (cuantos: number, sal: string) =>
-    Array.from({ length: cuantos }, (_, i) => 1 + (hash(`${p.id}${sal}${i}`) % 92));
-  const golesL = minutos(totalL, "L");
-  const golesV = minutos(totalV, "V");
-  if (t >= 112) return { ...p, estado: "final", golesLocal: totalL, golesVisita: totalV, minuto: undefined };
-  const jugado = t <= 47 ? t : t < 62 ? 45 : Math.min(45 + (t - 62), 95);
-  const minuto =
-    t <= 47 ? (t > 45 ? "45+" : `${Math.floor(t) + 1}'`) : t < 62 ? "Descanso" : jugado > 90 ? "90+" : `${Math.floor(jugado) + 1}'`;
-  return {
-    ...p,
-    estado: "vivo",
-    golesLocal: golesL.filter((m) => m <= jugado).length,
-    golesVisita: golesV.filter((m) => m <= jugado).length,
-    minuto,
-  };
+  const goles = (cuantos: number, sal: string) =>
+    Array.from({ length: cuantos }, (_, i) => 1 + (hash(`${p.id}${sal}${i}`) % 92)).filter((m) => m <= (t >= 112 ? 99 : jugado)).length;
+  return { ...p, estado, minuto, golesLocal: goles(totalL, "L"), golesVisita: goles(totalV, "V") };
 }
+
+const normal = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(fc|cf|ac|ssc|sl|sk|rc|rb|afc|as|vfb)\b/g, "")
+    .replace(/[^a-z0-9]/g, "");
+const mismoEquipo = (a: string, b: string) => {
+  const x = normal(a);
+  const y = normal(b);
+  return !!x && !!y && (x === y || x.includes(y) || y.includes(x) || x.slice(0, 5) === y.slice(0, 5));
+};
 
 /* ────────────────────────────── Utilidades ────────────────────────────── */
 
@@ -437,7 +511,7 @@ function planesDeMuestra(partidos: Partido[], ahora: number): Plan[] {
   const futuros = partidos.filter((p) => p.local.id !== "tbd" && Date.parse(p.inicio) + 112 * 60000 > ahora);
   if (!futuros.length) return [];
   // Preferimos los cruces con más cartel para la muestra.
-  const grandes = ["rma", "bar", "mci", "liv", "bay", "psg", "ars", "int"];
+  const grandes = ["rma", "bar", "mci", "liv", "bay", "psg", "ars", "int", "atm", "mun"];
   const orden = [...futuros.slice(0, 15)].sort(
     (a, b) =>
       Number(grandes.includes(b.local.id) || grandes.includes(b.visita.id)) -
@@ -474,40 +548,49 @@ function useAhora(desfase: number) {
   return ahora;
 }
 
-const BASE_EJEMPLO = calendarioEjemplo();
+const CALENDARIO = calendarioOficial();
 
-/** Partidos reales si la API responde con suficientes datos; si no, el calendario de ejemplo con marcador simulado. */
-function usePartidos(ahora: number) {
-  const [reales, setReales] = useState<Partido[] | null>(null);
-  const [fuente, setFuente] = useState<Fuente>("cargando");
+/**
+ * Calendario oficial UEFA; los marcadores de partidos en juego o recién terminados se completan con la fuente en vivo
+ * (TheSportsDB vía /api/partidos) cuando responde. En modo demo el marcador se simula.
+ */
+function usePartidos(ahora: number, demo: boolean) {
+  const [envivo, setEnvivo] = useState<Partido[]>([]);
 
   useEffect(() => {
-    let vivo = true;
+    if (demo) return;
+    let activo = true;
     const cargar = async () => {
       try {
         const r = await fetch("/api/partidos", { cache: "no-store" });
-        const j = (await r.json()) as { partidos: Partido[] };
-        if (!vivo) return;
-        if (j.partidos?.length >= 8) {
-          setReales(j.partidos);
-          setFuente("real");
-        } else setFuente((f) => (f === "real" ? f : "ejemplo"));
+        const j = (await r.json()) as { partidos?: Partido[] };
+        if (activo && j.partidos?.length) setEnvivo(j.partidos);
       } catch {
-        if (vivo) setFuente((f) => (f === "real" ? f : "ejemplo"));
+        /* sin fuente en vivo: se muestra el estado por horario */
       }
     };
     cargar();
     const t = setInterval(cargar, 60000);
     return () => {
-      vivo = false;
+      activo = false;
       clearInterval(t);
     };
-  }, []);
+  }, [demo]);
 
   const partidos = useMemo(
-    () => (fuente === "real" && reales ? reales : BASE_EJEMPLO.map((p) => simular(p, ahora))),
-    [fuente, reales, ahora],
+    () =>
+      CALENDARIO.map((base) => {
+        const p = conEstado(base, ahora, demo);
+        if (demo || p.estado === "programado" || p.golesLocal !== undefined || p.local.id === "tbd") return p;
+        const x = envivo.find(
+          (e) => claveDia(e.inicio) === claveDia(p.inicio) && mismoEquipo(e.local.nombre, p.local.nombre) && mismoEquipo(e.visita.nombre, p.visita.nombre),
+        );
+        if (!x || x.golesLocal === undefined) return p;
+        return { ...p, golesLocal: x.golesLocal, golesVisita: x.golesVisita, estado: x.estado === "final" ? "final" : p.estado, minuto: x.estado === "vivo" ? x.minuto ?? p.minuto : p.minuto };
+      }),
+    [ahora, demo, envivo],
   );
+  const fuente: Fuente = demo ? "demo" : envivo.length ? "envivo" : "oficial";
   return { partidos, fuente };
 }
 
@@ -577,6 +660,13 @@ function Marcador({ p, grande = false }: { p: Partido; grande?: boolean }) {
       <div className="text-center">
         <div className={`font-display font-bold leading-none text-white ${grande ? "text-4xl" : "text-2xl"}`}>{fmtHora(p.inicio)}</div>
         <div className="mt-1 text-[10px] uppercase tracking-widest text-white/45">hora local</div>
+      </div>
+    );
+  if (p.golesLocal === undefined)
+    return (
+      <div className="text-center">
+        <div className={`font-display font-bold leading-none text-white/70 ${grande ? "text-4xl" : "text-2xl"}`}>VS</div>
+        <div className="mt-1 text-[10px] uppercase tracking-widest text-white/45">{p.estado === "vivo" ? "en juego" : "resultado pendiente"}</div>
       </div>
     );
   return (
@@ -858,56 +948,58 @@ function Calendario({
   );
 }
 
-/* ─────────────────────────── Mapa ─────────────────────────── */
+/* ─────────────────────────── Mapa ilustrado (SVG) ─────────────────────────── */
 
-const ICONOS = new Map<string, L.DivIcon>();
-function iconoPin(tipo: TipoLugar | "nuevo", color: string, activo: boolean, etiqueta?: string) {
-  const clave = `${tipo}-${color}-${activo}-${etiqueta ?? ""}`;
-  const guardado = ICONOS.get(clave);
-  if (guardado) return guardado;
-  const emoji = tipo === "nuevo" ? "⚽" : EMOJI[tipo];
-  const html = `
-    <div class="pin-cuerpo" style="position:relative;width:44px;height:54px">
-      <svg width="44" height="54" viewBox="0 0 44 54"><path d="M22 2C11 2 2 10.6 2 21.4 2 36 22 52 22 52s20-16 20-30.6C42 10.6 33 2 22 2z" fill="${color}" stroke="#0b0e28" stroke-width="3.5" stroke-linejoin="round"/><circle cx="22" cy="21" r="12.5" fill="#fff" stroke="#0b0e28" stroke-width="2.5"/></svg>
-      <span style="position:absolute;left:0;top:10px;width:44px;text-align:center;font-size:16px;line-height:22px">${emoji}</span>
-      ${
-        etiqueta
-          ? `<span style="position:absolute;top:56px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#0b0e28;color:#f2c94c;border:2px solid #f2c94c;border-radius:999px;padding:1px 8px;font:800 11px var(--font-cuerpo),sans-serif;box-shadow:2px 2px 0 #06081a">${etiqueta}</span>`
-          : ""
-      }
-    </div>`;
-  const icono = L.divIcon({
-    html,
-    className: `pin-previa ${activo ? "activo" : ""} ${tipo === "nuevo" ? "nuevo" : ""}`,
-    iconSize: [44, 54],
-    iconAnchor: [22, 52],
-  });
-  ICONOS.set(clave, icono);
-  return icono;
+// Dibujo del mundo hecho con los países de Natural Earth incluidos en la app: no llama a ninguna API ni usa ubicación en tiempo real.
+const MUNDO = feature(
+  mundoTopo as unknown as Topology,
+  (mundoTopo as unknown as Topology<{ countries: GeometryCollection<{ name: string }> }>).objects.countries,
+) as FeatureCollection<Geometry, { name: string }>;
+const ESFERA = { type: "Sphere" } as const;
+const PASTEL = ["#ffd166", "#a8e6a1", "#ffb4a2", "#bde0fe", "#f7c8e0", "#c3f0ca", "#ffe29a", "#cdb4db"];
+
+type Foco = { lat: number; lng: number; zoom: number; n: number } | null;
+interface VistaMapa {
+  k: number;
+  x: number;
+  y: number;
 }
 
-function EventosMapa({ modoPin, onElegir }: { modoPin: boolean; onElegir: (lat: number, lng: number) => void }) {
-  useMapEvents({
-    click(e) {
-      if (modoPin) onElegir(e.latlng.lat, e.latlng.lng);
-    },
-  });
-  return null;
+function PinSvg({ tipo, color, activo, etiqueta, nuevo }: { tipo: TipoLugar | "nuevo"; color: string; activo: boolean; etiqueta?: string; nuevo?: boolean }) {
+  const ancho = etiqueta ? etiqueta.length * 7.4 + 20 : 0;
+  return (
+    <motion.g
+      initial={nuevo ? { y: -50, opacity: 0, scale: 0.6 } : false}
+      animate={{ y: 0, opacity: 1, scale: activo ? 1.18 : 1 }}
+      transition={{ type: "spring", stiffness: 420, damping: 18 }}
+      style={{ originX: "50%", originY: "100%" }}
+    >
+      <g transform="translate(-22 -52)" style={{ filter: "drop-shadow(3px 4px 0 rgba(6,8,26,.55))" }}>
+        <path
+          d="M22 2C11 2 2 10.6 2 21.4 2 36 22 52 22 52s20-16 20-30.6C42 10.6 33 2 22 2z"
+          fill={color}
+          stroke="#0b0e28"
+          strokeWidth="3.5"
+          strokeLinejoin="round"
+        />
+        <circle cx="22" cy="21" r="12.5" fill="#fff" stroke="#0b0e28" strokeWidth="2.5" />
+        <text x="22" y="27" textAnchor="middle" fontSize="16">
+          {tipo === "nuevo" ? "⚽" : EMOJI[tipo]}
+        </text>
+      </g>
+      {etiqueta && (
+        <g transform={`translate(${-ancho / 2} 6)`}>
+          <rect width={ancho} height="22" rx="11" fill="#0b0e28" stroke="#f2c94c" strokeWidth="2" />
+          <text x={ancho / 2} y="15" textAnchor="middle" fill="#f2c94c" fontSize="12" fontWeight="800" fontFamily="var(--font-cuerpo), sans-serif">
+            {etiqueta}
+          </text>
+        </g>
+      )}
+    </motion.g>
+  );
 }
 
-function ControlMapa({ foco, visible }: { foco: { lat: number; lng: number; zoom: number; n: number } | null; visible: boolean }) {
-  const map = useMap();
-  useEffect(() => {
-    if (foco) map.flyTo([foco.lat, foco.lng], foco.zoom, { duration: 1.2 });
-  }, [foco, map]);
-  useEffect(() => {
-    const t = setTimeout(() => map.invalidateSize(), 120);
-    return () => clearTimeout(t);
-  }, [visible, map]);
-  return null;
-}
-
-function Mapa({
+function MapaSvg({
   planes,
   partidosPorId,
   yo,
@@ -915,8 +1007,8 @@ function Mapa({
   modoPin,
   borrador,
   foco,
-  visible,
   estilo,
+  orden,
   onElegir,
   onAbrir,
 }: {
@@ -926,12 +1018,174 @@ function Mapa({
   activo: string | null;
   modoPin: boolean;
   borrador: { lat: number; lng: number } | null;
-  foco: { lat: number; lng: number; zoom: number; n: number } | null;
-  visible: boolean;
+  foco: Foco;
   estilo: "caricatura" | "noche";
+  orden: { tipo: "mas" | "menos" | "todo"; n: number } | null;
   onElegir: (lat: number, lng: number) => void;
   onAbrir: (pl: Plan) => void;
 }) {
+  const caja = useRef<HTMLDivElement>(null);
+  const [tam, setTam] = useState({ w: 0, h: 0 });
+  const [vista, setVista] = useState<VistaMapa>({ k: 1, x: 0, y: 0 });
+  const vistaRef = useRef(vista);
+  vistaRef.current = vista;
+  const punteros = useRef(new Map<number, { x: number; y: number }>());
+  const gesto = useRef<{ x: number; y: number; vista: VistaMapa; movido: boolean; dist?: number; k?: number } | null>(null);
+  const animacion = useRef<number | null>(null);
+
+  useEffect(() => {
+    const el = caja.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setTam({ w: Math.round(e.contentRect.width), h: Math.round(e.contentRect.height) }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const proy = useMemo(() => geoNaturalEarth1().fitExtent([[10, 10], [Math.max(tam.w - 10, 20), Math.max(tam.h - 10, 20)]], ESFERA), [tam]);
+  const camino = useMemo(() => geoPath(proy), [proy]);
+  const formas = useMemo(
+    () => MUNDO.features.map((f, i) => ({ id: String(f.id ?? i), nombre: f.properties?.name ?? "", d: camino(f) ?? "" })),
+    [camino],
+  );
+  const esfera = useMemo(() => camino(ESFERA) ?? "", [camino]);
+  const reticula = useMemo(() => camino(geoGraticule10()) ?? "", [camino]);
+
+  const limitar = useCallback(
+    (v: VistaMapa): VistaMapa => {
+      const k = Math.min(14, Math.max(1, v.k));
+      const { w, h } = tam;
+      return { k, x: Math.min(w * 0.6, Math.max(w - w * k - w * 0.6, v.x)), y: Math.min(h * 0.6, Math.max(h - h * k - h * 0.6, v.y)) };
+    },
+    [tam],
+  );
+
+  const irA = useCallback(
+    (destino: VistaMapa) => {
+      if (animacion.current) cancelAnimationFrame(animacion.current);
+      const desde = vistaRef.current;
+      const hasta = limitar(destino);
+      const t0 = performance.now();
+      const paso = (t: number) => {
+        const u = Math.min(1, (t - t0) / 650);
+        const e = 1 - Math.pow(1 - u, 3);
+        setVista({ k: desde.k + (hasta.k - desde.k) * e, x: desde.x + (hasta.x - desde.x) * e, y: desde.y + (hasta.y - desde.y) * e });
+        if (u < 1) animacion.current = requestAnimationFrame(paso);
+      };
+      animacion.current = requestAnimationFrame(paso);
+    },
+    [limitar],
+  );
+
+  const centrarEn = useCallback(
+    (lng: number, lat: number, k: number) => {
+      const p = proy([lng, lat]);
+      if (!p) return;
+      irA({ k, x: tam.w / 2 - p[0] * k, y: tam.h / 2 - p[1] * k });
+    },
+    [proy, tam, irA],
+  );
+
+  // Vista inicial: el mapa llena el alto en pantallas verticales y se centra en el Atlántico.
+  const iniciado = useRef(false);
+  useEffect(() => {
+    if (!tam.w || iniciado.current) return;
+    iniciado.current = true;
+    const b = camino.bounds(ESFERA);
+    const alto = b[1][1] - b[0][1];
+    const k = Math.min(3.2, Math.max(1, (tam.h * 0.95) / alto));
+    const p = proy([tam.w < 640 ? -70 : -35, 18]) ?? [tam.w / 2, tam.h / 2];
+    setVista(limitar({ k, x: tam.w / 2 - p[0] * k, y: tam.h / 2 - p[1] * k }));
+  }, [tam, camino, proy, limitar]);
+
+  useEffect(() => {
+    if (foco) centrarEn(foco.lng, foco.lat, Math.max(vistaRef.current.k, foco.zoom));
+  }, [foco, centrarEn]);
+
+  useEffect(() => {
+    if (!orden) return;
+    const v = vistaRef.current;
+    if (orden.tipo === "todo") {
+      irA({ k: 1, x: 0, y: 0 });
+      return;
+    }
+    const nk = orden.tipo === "mas" ? v.k * 1.6 : v.k / 1.6;
+    const cx = tam.w / 2;
+    const cy = tam.h / 2;
+    irA({ k: nk, x: cx - (cx - v.x) * (nk / v.k), y: cy - (cy - v.y) * (nk / v.k) });
+  }, [orden, irA, tam]);
+
+  const zoomEn = useCallback(
+    (sx: number, sy: number, nk: number) => {
+      const v = vistaRef.current;
+      const k = Math.min(14, Math.max(1, nk));
+      setVista(limitar({ k, x: sx - (sx - v.x) * (k / v.k), y: sy - (sy - v.y) * (k / v.k) }));
+    },
+    [limitar],
+  );
+
+  useEffect(() => {
+    const el = caja.current;
+    if (!el) return;
+    const rueda = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      zoomEn(e.clientX - r.left, e.clientY - r.top, vistaRef.current.k * Math.exp(-e.deltaY * 0.0018));
+    };
+    el.addEventListener("wheel", rueda, { passive: false });
+    return () => el.removeEventListener("wheel", rueda);
+  }, [zoomEn]);
+
+  const local = (e: React.PointerEvent) => {
+    const r = caja.current!.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+
+  const alBajar = (e: React.PointerEvent<SVGSVGElement>) => {
+    if ((e.target as Element).closest("[data-pin]")) return;
+    if (animacion.current) cancelAnimationFrame(animacion.current);
+    punteros.current.set(e.pointerId, local(e));
+    const pts = [...punteros.current.values()];
+    if (pts.length === 1) gesto.current = { ...pts[0], vista: vistaRef.current, movido: false };
+    if (pts.length === 2) {
+      gesto.current = { x: 0, y: 0, vista: vistaRef.current, movido: true, dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), k: vistaRef.current.k };
+    }
+  };
+
+  const alMover = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!punteros.current.has(e.pointerId) || !gesto.current) return;
+    punteros.current.set(e.pointerId, local(e));
+    const pts = [...punteros.current.values()];
+    const g = gesto.current;
+    if (pts.length >= 2 && g.dist && g.k) {
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      zoomEn((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2, (g.k * d) / g.dist);
+      return;
+    }
+    const dx = pts[0].x - g.x;
+    const dy = pts[0].y - g.y;
+    if (!g.movido && Math.hypot(dx, dy) > 5) {
+      g.movido = true;
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    if (g.movido) setVista(limitar({ k: g.vista.k, x: g.vista.x + dx, y: g.vista.y + dy }));
+  };
+
+  const alSoltar = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (!punteros.current.has(e.pointerId)) return;
+    const g = gesto.current;
+    const p = local(e);
+    punteros.current.delete(e.pointerId);
+    if (punteros.current.size === 0) gesto.current = null;
+    if (!g || g.movido || !modoPin) return;
+    const v = vistaRef.current;
+    const coords = proy.invert?.([(p.x - v.x) / v.k, (p.y - v.y) / v.k]);
+    if (!coords || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) return;
+    const [lng, lat] = coords;
+    const vuelta = proy([lng, lat]);
+    if (!vuelta || Math.hypot(vuelta[0] - (p.x - v.x) / v.k, vuelta[1] - (p.y - v.y) / v.k) > 1) return; // fuera del globo
+    onElegir(lat, lng);
+  };
+
   const color = (pl: Plan) => {
     const p = partidosPorId.get(pl.partidoId);
     if (p?.estado === "vivo") return "#ff3b6b";
@@ -939,37 +1193,86 @@ function Mapa({
     if (yo && (pl.anfitrion === yo || pl.confirmados.includes(yo))) return "#f2c94c";
     return "#00f0ff";
   };
+
+  const aPantalla = (lng: number, lat: number) => {
+    const p = proy([lng, lat]);
+    return p ? { x: p[0] * vista.k + vista.x, y: p[1] * vista.k + vista.y } : null;
+  };
+
+  const noche = estilo === "noche";
+  const pines = [...planes].sort((a, b) => Number(a.id === activo) - Number(b.id === activo));
+
   return (
-    <MapContainer
-      center={[24, -45]}
-      zoom={3}
-      minZoom={2}
-      worldCopyJump
-      zoomControl={false}
-      className={`h-full w-full ${estilo === "caricatura" ? "mapa-caricatura" : "mapa-noche"} ${modoPin ? "cursor-crosshair" : ""}`}
-    >
-      <TileLayer
-        key={estilo}
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        url={
-          estilo === "caricatura"
-            ? "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-            : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        }
-      />
-      <EventosMapa modoPin={modoPin} onElegir={onElegir} />
-      <ControlMapa foco={foco} visible={visible} />
-      {planes.map((pl) => (
-        <Marker
-          key={pl.id}
-          position={[pl.lat, pl.lng]}
-          icon={iconoPin(pl.tipo, color(pl), activo === pl.id, activo === pl.id ? pl.hashtag : undefined)}
-          eventHandlers={{ click: () => onAbrir(pl) }}
-          zIndexOffset={activo === pl.id ? 1000 : 0}
-        />
-      ))}
-      {borrador && <Marker position={[borrador.lat, borrador.lng]} icon={iconoPin("nuevo", "#f2c94c", true)} />}
-    </MapContainer>
+    <div ref={caja} className={`absolute inset-0 overflow-hidden ${noche ? "bg-noche-950" : "bg-[#1b2a6b]"}`}>
+      {tam.w > 0 && (
+        <svg
+          width={tam.w}
+          height={tam.h}
+          className={`block touch-none select-none ${modoPin ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
+          onPointerDown={alBajar}
+          onPointerMove={alMover}
+          onPointerUp={alSoltar}
+          onPointerCancel={alSoltar}
+          role="application"
+          aria-label="Mapa del mundo para poner pines"
+        >
+          <defs>
+            <pattern id="trama" width="6" height="6" patternUnits="userSpaceOnUse">
+              <circle cx="3" cy="3" r="0.9" fill={noche ? "rgba(0,240,255,.12)" : "rgba(11,14,40,.13)"} />
+            </pattern>
+          </defs>
+          <g transform={`translate(${vista.x} ${vista.y}) scale(${vista.k})`}>
+            <path d={esfera} fill={noche ? "#0b0e28" : "#7fd3ea"} stroke="#0b0e28" strokeWidth={3} vectorEffect="non-scaling-stroke" />
+            <path d={reticula} fill="none" stroke={noche ? "rgba(0,240,255,.12)" : "rgba(255,255,255,.55)"} strokeWidth={1} strokeDasharray="3 4" vectorEffect="non-scaling-stroke" />
+            <g>
+              {formas.map((f) => (
+                <path
+                  key={f.id}
+                  d={f.d}
+                  fill={noche ? "#1d2560" : PASTEL[hash(f.id) % PASTEL.length]}
+                  stroke={noche ? "#00f0ff" : "#0b0e28"}
+                  strokeWidth={noche ? 0.7 : 1.4}
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                  className="transition-[filter] duration-150 hover:brightness-110"
+                >
+                  <title>{f.nombre}</title>
+                </path>
+              ))}
+            </g>
+            <path d={esfera} fill="url(#trama)" pointerEvents="none" />
+          </g>
+
+          {pines.map((pl) => {
+            const s = aPantalla(pl.lng, pl.lat);
+            if (!s) return null;
+            const esActivo = activo === pl.id;
+            return (
+              <g
+                key={pl.id}
+                data-pin
+                transform={`translate(${s.x} ${s.y})`}
+                className="cursor-pointer"
+                onClick={() => onAbrir(pl)}
+                role="button"
+                aria-label={`${pl.hashtag} en ${pl.lugar}`}
+              >
+                <PinSvg tipo={pl.tipo} color={color(pl)} activo={esActivo} etiqueta={esActivo ? pl.hashtag : undefined} />
+              </g>
+            );
+          })}
+          {borrador &&
+            (() => {
+              const s = aPantalla(borrador.lng, borrador.lat);
+              return s ? (
+                <g transform={`translate(${s.x} ${s.y})`} pointerEvents="none">
+                  <PinSvg tipo="nuevo" color="#f2c94c" activo nuevo />
+                </g>
+              ) : null;
+            })()}
+        </svg>
+      )}
+    </div>
   );
 }
 
@@ -1131,28 +1434,6 @@ function FormularioPin({
   const [hashtag, setHashtag] = useState("#");
   const [tocadoTag, setTocadoTag] = useState(false);
   const [anfitrion, setAnfitrion] = useState(yo);
-  const [buscando, setBuscando] = useState(true);
-
-  // Prellenado con geocodificación inversa (OpenStreetMap Nominatim); si falla, se llena a mano.
-  useEffect(() => {
-    let vivo = true;
-    setBuscando(true);
-    fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${punto.lat}&lon=${punto.lng}&accept-language=es&zoom=14`)
-      .then((r) => r.json())
-      .then((j: { address?: Record<string, string> }) => {
-        if (!vivo || !j.address) return;
-        const a = j.address;
-        setPais((v) => v || a.country || "");
-        setEstado((v) => v || a.state || a.region || a.province || "");
-        setCiudad((v) => v || a.city || a.town || a.village || a.municipality || a.county || "");
-      })
-      .catch(() => undefined)
-      .finally(() => vivo && setBuscando(false));
-    return () => {
-      vivo = false;
-    };
-  }, [punto.lat, punto.lng]);
-
   useEffect(() => {
     if (!tocadoTag && ciudad) setHashtag(sugerirHashtag(ciudad, hashtagsUsados));
   }, [ciudad, tocadoTag, hashtagsUsados]);
@@ -1209,14 +1490,14 @@ function FormularioPin({
 
         <div className="grid grid-cols-2 gap-3">
           <Campo etiqueta="País">
-            <input value={pais} onChange={(e) => setPais(e.target.value)} className={claseInput} placeholder={buscando ? "Buscando…" : "México"} />
+            <input value={pais} onChange={(e) => setPais(e.target.value)} className={claseInput} placeholder="México" />
           </Campo>
           <Campo etiqueta="Estado">
-            <input value={estado} onChange={(e) => setEstado(e.target.value)} className={claseInput} placeholder={buscando ? "Buscando…" : "Jalisco"} />
+            <input value={estado} onChange={(e) => setEstado(e.target.value)} className={claseInput} placeholder="Jalisco" />
           </Campo>
         </div>
         <Campo etiqueta="Ciudad">
-          <input value={ciudad} onChange={(e) => setCiudad(e.target.value)} className={claseInput} placeholder={buscando ? "Buscando…" : "Guadalajara"} />
+          <input value={ciudad} onChange={(e) => setCiudad(e.target.value)} className={claseInput} placeholder="Guadalajara" />
         </Campo>
 
         <Campo etiqueta="¿Dónde se juntan?">
@@ -1649,8 +1930,9 @@ function ModalCompartir({ mensaje, url, onCerrar, onCopiado }: { mensaje: string
 
 export default function LaPrevia() {
   const [desfase, setDesfase] = useState(0);
+  const [demo, setDemo] = useState(false);
   const ahora = useAhora(desfase);
-  const { partidos, fuente } = usePartidos(ahora);
+  const { partidos, fuente } = usePartidos(ahora, demo);
   const partidosPorId = useMemo(() => new Map(partidos.map((p) => [p.id, p])), [partidos]);
 
   const [planes, setPlanes] = useState<Plan[]>([]);
@@ -1664,6 +1946,7 @@ export default function LaPrevia() {
   const [foco, setFoco] = useState<{ lat: number; lng: number; zoom: number; n: number } | null>(null);
   const [focoPartido, setFocoPartido] = useState<string | null>(null);
   const [estiloMapa, setEstiloMapa] = useState<"caricatura" | "noche">("caricatura");
+  const [ordenMapa, setOrdenMapa] = useState<{ tipo: "mas" | "menos" | "todo"; n: number } | null>(null);
   const [compartir, setCompartir] = useState<{ mensaje: string; url: string } | null>(null);
   const [pedirNombre, setPedirNombre] = useState<((n: string) => void) | null>(null);
   const [avisos, setAvisos] = useState<Aviso[]>([]);
@@ -1682,12 +1965,13 @@ export default function LaPrevia() {
     let des = 0;
     if (params.get("demo") === "vivo") {
       // Modo demostración: adelanta el reloj al siguiente partido para ver el marcador en vivo.
-      const sig = BASE_EJEMPLO.find((p) => Date.parse(p.inicio) > Date.now() && p.local.id !== "tbd");
+      const sig = CALENDARIO.find((p) => Date.parse(p.inicio) > Date.now() && p.local.id !== "tbd");
       if (sig) des = Date.parse(sig.inicio) + 38 * 60000 - Date.now();
       setDesfase(des);
+      setDemo(true);
     }
     const guardados = leer<Plan[] | null>("previa:planes", null);
-    let iniciales = guardados ?? planesDeMuestra(BASE_EJEMPLO.map((p) => simular(p, Date.now() + des)), Date.now() + des);
+    let iniciales = guardados ?? planesDeMuestra(CALENDARIO.map((p) => conEstado(p, Date.now() + des, false)), Date.now() + des);
     setYo(leer<string>("previa:yo", ""));
     setPermiso(typeof Notification === "undefined" ? "no-soportado" : Notification.permission);
 
@@ -1699,7 +1983,7 @@ export default function LaPrevia() {
           const ya = iniciales.find((x) => x.id === pl.id);
           if (!ya) iniciales = [...iniciales, { ...pl, chat: pl.chat ?? [] }];
           setAbierto(pl.id);
-          setFoco({ lat: pl.lat, lng: pl.lng, zoom: 12, n: Date.now() });
+          setFoco({ lat: pl.lat, lng: pl.lng, zoom: 5, n: Date.now() });
           setTimeout(() => avisar({ titulo: `Te invitaron a ${pl.hashtag}`, texto: `${pl.snap.local} vs ${pl.snap.visita} en ${pl.lugar}`, tono: "oro" }), 400);
         }
       } catch {
@@ -1801,7 +2085,7 @@ export default function LaPrevia() {
 
   const abrirPlan = (pl: Plan) => {
     setAbierto(pl.id);
-    setFoco({ lat: pl.lat, lng: pl.lng, zoom: 12, n: Date.now() });
+    setFoco({ lat: pl.lat, lng: pl.lng, zoom: 5, n: Date.now() });
   };
 
   const empezarPin = (partidoId: string | null = null) => {
@@ -1816,16 +2100,6 @@ export default function LaPrevia() {
     setModoPin(false);
   };
 
-  const miUbicacion = () => {
-    if (!navigator.geolocation) return avisar({ titulo: "Tu navegador no comparte ubicación" });
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setFoco({ lat: pos.coords.latitude, lng: pos.coords.longitude, zoom: 14, n: Date.now() });
-        if (modoPin) elegirPunto(pos.coords.latitude, pos.coords.longitude);
-      },
-      () => avisar({ titulo: "No pudimos obtener tu ubicación" }),
-    );
-  };
 
   const guardarPin = (pl: Plan) => {
     setPlanes((xs) => [...xs, pl]);
@@ -1917,12 +2191,16 @@ export default function LaPrevia() {
 
         <div className="ml-auto flex items-center gap-2">
           <span
-            title={fuente === "real" ? "Partidos reales desde TheSportsDB" : "Calendario de ejemplo 2026/27 con marcador simulado"}
+            title={
+              fuente === "demo"
+                ? "Partidos y fechas oficiales de uefa.com; el marcador en vivo está simulado para la demostración"
+                : "Partidos, fechas y resultados oficiales publicados en uefa.com"
+            }
             className={`hidden rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider sm:inline ${
-              fuente === "real" ? "bg-neon/15 text-neon" : "bg-oro/15 text-oro"
+              fuente === "demo" ? "bg-oro/15 text-oro" : "bg-neon/15 text-neon"
             }`}
           >
-            {fuente === "real" ? "Datos en vivo" : fuente === "cargando" ? "Cargando…" : "Datos de ejemplo"}
+            {fuente === "demo" ? "Calendario oficial · marcador demo" : "Calendario oficial UEFA"}
           </span>
           <button
             onClick={pedirPermiso}
@@ -1945,7 +2223,7 @@ export default function LaPrevia() {
       <div className="relative flex min-h-0 flex-1">
         {/* Mapa */}
         <section className={`${vista === "mapa" ? "flex" : "hidden"} relative min-w-0 flex-1 lg:flex`}>
-          <Mapa
+          <MapaSvg
             planes={filtrados}
             partidosPorId={partidosPorId}
             yo={yo}
@@ -1953,8 +2231,8 @@ export default function LaPrevia() {
             modoPin={modoPin}
             borrador={borrador}
             foco={foco}
-            visible={vista === "mapa"}
             estilo={estiloMapa}
+            orden={ordenMapa}
             onElegir={elegirPunto}
             onAbrir={abrirPlan}
           />
@@ -1977,14 +2255,17 @@ export default function LaPrevia() {
             >
               <Layers className="h-5 w-5" />
             </button>
-            <button
-              onClick={miUbicacion}
-              className="grid h-10 w-10 place-items-center rounded-xl border-2 border-noche bg-white text-noche shadow-comic transition active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
-              aria-label="Ir a mi ubicación"
-              title="Mi ubicación"
-            >
-              <LocateFixed className="h-5 w-5" />
-            </button>
+            {(
+              [
+                ["mas", "Acercar", Plus],
+                ["menos", "Alejar", Minus],
+                ["todo", "Ver el mundo completo", Globe2],
+              ] as const
+            ).map(([tipo, txt, Icono]) => (
+              <button key={tipo} onClick={() => setOrdenMapa({ tipo, n: Date.now() })} className="grid h-10 w-10 place-items-center rounded-xl border-2 border-noche bg-white text-noche shadow-comic transition active:translate-x-0.5 active:translate-y-0.5 active:shadow-none" aria-label={txt} title={txt}>
+                <Icono className="h-5 w-5" />
+              </button>
+            ))}
           </div>
 
           <AnimatePresence>
@@ -1998,10 +2279,7 @@ export default function LaPrevia() {
                 <motion.span animate={{ y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 1 }} className="text-2xl">
                   📍
                 </motion.span>
-                <p className="flex-1 text-sm font-extrabold leading-tight">Toca el mapa donde se van a juntar</p>
-                <button onClick={miUbicacion} className="rounded-lg bg-noche px-2 py-1.5 text-xs font-bold text-oro">
-                  Aquí estoy
-                </button>
+                <p className="flex-1 text-sm font-extrabold leading-tight">Toca el dibujo donde se van a juntar. Acerca el mapa para mayor precisión.</p>
                 <button onClick={() => setModoPin(false)} aria-label="Cancelar" className="rounded-lg p-1 hover:bg-noche/10">
                   <X className="h-5 w-5" />
                 </button>

@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope, Saira_Condensed } from "next/font/google";
-import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
 const cuerpo = Manrope({ subsets: ["latin"], variable: "--font-cuerpo", display: "swap" });
