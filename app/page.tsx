@@ -1,15 +1,12 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Cargando from "@/components/Cargando";
 
-// Leaflet necesita `window`, así que la app se carga solo en el navegador.
+// La app usa `window` (mapa, LocalStorage, notificaciones): se carga solo en el navegador y mientras tanto sale el balón.
 const LaPrevia = dynamic(() => import("@/components/LaPrevia"), {
   ssr: false,
-  loading: () => (
-    <div className="cielo grid h-dvh place-items-center">
-      <p className="font-display text-2xl font-bold tracking-wide text-neon">Calentando motores…</p>
-    </div>
-  ),
+  loading: () => <Cargando />,
 });
 
 export default function Page() {
