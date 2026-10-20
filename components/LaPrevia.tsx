@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useTransform } from "framer-motion";
 import { geoContains, geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature, merge, neighbors } from "topojson-client";
+import { fechaLocal, leerJuegosESPN, NOMBRE_LIGA, urlESPN, type JuegoLiga, type Liga } from "@/lib/ligas";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import type { FeatureCollection, Geometry } from "geojson";
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
@@ -879,7 +880,7 @@ function Stats({ tabla, onPartidos }: { tabla: FilaTabla[]; onPartidos: () => vo
   const jugados = tabla.reduce((n, f) => n + f.pj, 0) / 2;
   const cab = "px-1.5 py-2 text-center";
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-28 pt-4 lg:pb-6">
+    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-40 pt-4 lg:pb-6">
       <div className="px-1">
         <h2 className="font-display text-2xl font-extrabold uppercase tracking-wide">Tabla · Fase de liga</h2>
         <p className="text-xs text-white/50">Se actualiza con cada marcador, también en vivo. Los 36 clubes en una sola tabla.</p>
@@ -1067,7 +1068,7 @@ function Calendario({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-28 pt-3 lg:pb-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-40 pt-3 lg:pb-6">
         {diaActivo && (
           <p className="mb-3 font-display text-sm font-bold uppercase tracking-widest text-white/50 first-letter:uppercase">
             {fmtDiaLargo(`${diaActivo}T12:00:00`)} · {delDia.length} {delDia.length === 1 ? "partido" : "partidos"}
@@ -2835,7 +2836,7 @@ function ListaPlanes({
           ))}
         </div>
       </div>
-      <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 pb-28 pt-3 lg:pb-6">
+      <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 pb-40 pt-3 lg:pb-6">
         {lista.length === 0 && (
           <div className="rounded-2xl border border-dashed border-white/20 p-6 text-center">
             <p className="text-sm text-white/60">{soloMios ? "Aún no te apuntas a ningún plan." : "Todavía no hay pines."}</p>
@@ -3056,7 +3057,7 @@ function ChatEnVivo({ mensajes, yo, enLinea, acciones }: { mensajes: Mensaje[]; 
         placeholder="Escribe a todos…"
         idCampo="chat-general"
         claseLista="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3"
-        claseForm="p-3 pb-24 lg:pb-3"
+        claseForm="p-3 pb-[8.5rem] lg:pb-3"
       />
     </div>
   );
@@ -3339,7 +3340,175 @@ function FilaEvento({ ev, onBorrar, conFecha }: { ev: EventoPersonal; onBorrar: 
 
 /* ─────────────────────────── App principal ─────────────────────────── */
 
+/* ---------- Cinta de MLB y NBA ---------- */
+
+type JuegosDelDia = Record<Liga, JuegoLiga[] | null>;
+
+/** Juegos de hoy (día local) de MLB y NBA. null en una liga = no se pudo leer; se refresca cada minuto. */
+function useLigasHoy() {
+  const [datos, setDatos] = useState<JuegosDelDia | "cargando">("cargando");
+  useEffect(() => {
+    let activo = true;
+    const cargar = async () => {
+      const fecha = fechaLocal();
+      let j: JuegosDelDia | null = null;
+      try {
+        const r = await fetch(`/api/ligas?fecha=${fecha}`, { cache: "no-store" });
+        if (r.ok) j = (await r.json()) as JuegosDelDia;
+      } catch {
+        /* sin servidor: se intenta directo con ESPN */
+      }
+      if (!j || (!j.mlb && !j.nba)) {
+        const directo = async (liga: Liga) => {
+          try {
+            const r = await fetch(urlESPN(liga, fecha));
+            return r.ok ? leerJuegosESPN(liga, await r.json()) : null;
+          } catch {
+            return null;
+          }
+        };
+        const [mlb, nba] = await Promise.all([directo("mlb"), directo("nba")]);
+        j = { mlb, nba };
+      }
+      const nuevo = j;
+      // Si un refresco falla, se queda lo último que sí se leyó.
+      if (activo) setDatos((prev) => (nuevo.mlb || nuevo.nba || prev === "cargando" ? nuevo : prev));
+    };
+    cargar();
+    const t = setInterval(cargar, 60000);
+    return () => {
+      activo = false;
+      clearInterval(t);
+    };
+  }, []);
+  return datos;
+}
+
+const ICONO_LIGA: Record<Liga, string> = { mlb: "⚾", nba: "🏀" };
+const horaCorta = (iso: string) => new Date(iso).toLocaleTimeString("es-MX", { hour: "numeric", minute: "2-digit" });
+
+function textoJuego(g: JuegoLiga) {
+  if (g.estado === "programado") return `${g.visita.abrev} @ ${g.local.abrev} · ${horaCorta(g.inicio)}`;
+  return `${g.visita.abrev} ${g.visita.marcador} - ${g.local.marcador} ${g.local.abrev} · ${g.estado === "final" ? "Final" : g.detalle}`;
+}
+
+function CintaLigas({ datos, onAbrir }: { datos: JuegosDelDia | "cargando"; onAbrir: () => void }) {
+  const piezas: { clave: string; icono: string; texto: string; vivo?: boolean }[] = [];
+  if (datos === "cargando") piezas.push({ clave: "c", icono: "⏳", texto: "Buscando los juegos de hoy de MLB y NBA…" });
+  else
+    (["mlb", "nba"] as const).forEach((liga) => {
+      const js = datos[liga];
+      if (js === null) piezas.push({ clave: liga, icono: ICONO_LIGA[liga], texto: `${NOMBRE_LIGA[liga]}: marcadores no disponibles ahorita` });
+      else if (!js.length) piezas.push({ clave: liga, icono: ICONO_LIGA[liga], texto: `Hoy no hay juegos de ${NOMBRE_LIGA[liga]}` });
+      else js.forEach((g) => piezas.push({ clave: g.id, icono: ICONO_LIGA[liga], texto: textoJuego(g), vivo: g.estado === "vivo" }));
+    });
+  // La tira va duplicada para que el desplazamiento no tenga cortes; más texto, más lento.
+  const duracion = Math.max(35, piezas.reduce((n, p) => n + p.texto.length, 0) * 0.45);
+  return (
+    <button
+      onClick={onAbrir}
+      aria-label="Ver los juegos de hoy de MLB y NBA"
+      className="group flex h-8 w-full items-center overflow-hidden rounded-xl border border-white/10 bg-noche-900/95 text-left shadow-xl backdrop-blur"
+    >
+      <span className="z-10 flex h-full shrink-0 items-center gap-1 bg-oro px-2.5 font-display text-xs font-extrabold uppercase tracking-wide text-noche">Hoy ⚾🏀</span>
+      <span className="relative h-full min-w-0 flex-1 overflow-hidden [mask-image:linear-gradient(90deg,transparent,#000_16px,#000_calc(100%-16px),transparent)]">
+        <span className="cinta absolute inset-y-0 left-0 flex w-max items-center group-hover:[animation-play-state:paused]" style={{ animationDuration: `${duracion}s` }}>
+          {[0, 1].map((copia) => (
+            <span key={copia} aria-hidden={copia === 1} className="flex items-center">
+              {piezas.map((p) => (
+                <span key={p.clave} className="flex items-center gap-1.5 whitespace-nowrap px-4 text-xs font-semibold text-white/85">
+                  {p.vivo && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-vivo" />}
+                  <span>{p.icono}</span>
+                  {p.texto}
+                  <span className="pl-4 text-white/25">•</span>
+                </span>
+              ))}
+            </span>
+          ))}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function LadoMarcador({ l, gana }: { l: JuegoLiga["local"]; gana: boolean }) {
+  const [sinLogo, setSinLogo] = useState(false);
+  return (
+    <div className="flex items-center gap-2.5">
+      {l.logo && !sinLogo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={l.logo} alt="" className="h-7 w-7 object-contain" loading="lazy" onError={() => setSinLogo(true)} />
+      ) : (
+        <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10 text-[10px] font-bold">{l.abrev}</span>
+      )}
+      <span className={`flex-1 truncate text-sm ${gana ? "font-extrabold text-white" : "font-semibold text-white/75"}`}>{l.nombre}</span>
+      {l.marcador !== undefined && <span className={`font-display text-xl ${gana ? "font-extrabold text-white" : "font-bold text-white/60"}`}>{l.marcador}</span>}
+    </div>
+  );
+}
+
+function HojaLigas({ datos, onCerrar }: { datos: JuegosDelDia | "cargando"; onCerrar: () => void }) {
+  const cuenta = (l: Liga) => (datos === "cargando" ? 0 : (datos[l]?.length ?? 0));
+  const [liga, setLiga] = useState<Liga>(() => (cuenta("mlb") || !cuenta("nba") ? "mlb" : "nba"));
+  const juegos = datos === "cargando" ? undefined : datos[liga];
+  const hoy = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" }).replace(/^./, (c) => c.toUpperCase());
+  return (
+    <Hoja titulo="Hoy en MLB y NBA" onCerrar={onCerrar}>
+      <p className="-mt-1 mb-3 text-xs font-semibold text-white/50">
+        {hoy} · marcadores de ESPN
+      </p>
+      <div className="mb-3 flex gap-2">
+        {(["mlb", "nba"] as const).map((l) => (
+          <button
+            key={l}
+            onClick={() => setLiga(l)}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl border-2 py-2 font-display text-sm font-extrabold uppercase tracking-wide ${liga === l ? "border-noche bg-neon text-noche shadow-comic" : "border-white/10 text-white/70"}`}
+          >
+            {ICONO_LIGA[l]} {NOMBRE_LIGA[l]}
+            <span className={`rounded-full px-1.5 text-[11px] ${liga === l ? "bg-noche/15" : "bg-white/10"}`}>{cuenta(l)}</span>
+          </button>
+        ))}
+      </div>
+      {juegos === undefined ? (
+        <p className="py-10 text-center text-sm text-white/60">Buscando juegos…</p>
+      ) : juegos === null ? (
+        <p className="py-10 text-center text-sm text-white/60">No pudimos leer los marcadores de {NOMBRE_LIGA[liga]} ahorita. Reintentamos cada minuto.</p>
+      ) : !juegos.length ? (
+        <p className="py-10 text-center text-sm text-white/60">
+          Hoy no hay juegos de {NOMBRE_LIGA[liga]}. {ICONO_LIGA[liga]}
+        </p>
+      ) : (
+        <ul className="space-y-2.5 pb-2">
+          {juegos.map((g) => {
+            const v = g.visita.marcador ?? 0;
+            const c = g.local.marcador ?? 0;
+            const terminado = g.estado === "final";
+            return (
+              <li key={g.id} className="rounded-2xl border border-white/10 bg-white/[.04] p-3">
+                <div className="mb-2 flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wide">
+                  <span className={g.estado === "vivo" ? "flex items-center gap-1.5 text-vivo" : terminado ? "text-white/50" : "text-neon"}>
+                    {g.estado === "vivo" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-vivo" />}
+                    {g.estado === "programado" ? horaCorta(g.inicio) : terminado ? "Final" : g.detalle}
+                  </span>
+                  {g.nota && <span className="truncate text-oro">{g.nota}</span>}
+                </div>
+                <div className="space-y-1.5">
+                  <LadoMarcador l={g.visita} gana={terminado && v > c} />
+                  <LadoMarcador l={g.local} gana={terminado && c > v} />
+                </div>
+                {g.sede && <p className="mt-2 text-[11px] text-white/40">{g.sede}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Hoja>
+  );
+}
+
 export default function LaPrevia() {
+  const ligasHoy = useLigasHoy();
+  const [verLigas, setVerLigas] = useState(false);
   const [desfase, setDesfase] = useState(0);
   const [demo, setDemo] = useState(false);
   const ahora = useAhora(desfase);
@@ -3983,13 +4152,13 @@ export default function LaPrevia() {
               whileHover={{ scale: 1.06 }}
               whileTap={{ scale: 0.9, rotate: -8 }}
               onClick={() => empezarPin()}
-              className="absolute bottom-24 right-4 z-[500] flex items-center gap-2 rounded-2xl border-2 border-noche bg-neon px-4 py-3 font-display text-lg font-extrabold uppercase tracking-wide text-noche shadow-comic lg:bottom-6"
+              className="absolute bottom-[8.5rem] right-4 z-[500] flex items-center gap-2 rounded-2xl border-2 border-noche bg-neon px-4 py-3 font-display text-lg font-extrabold uppercase tracking-wide text-noche shadow-comic lg:bottom-6"
             >
               <MapPin className="h-5 w-5" /> Poner mi pin
             </motion.button>
           )}
 
-          <div className="absolute bottom-24 left-3 z-[500] hidden rounded-xl bg-noche/85 p-2.5 text-[11px] font-semibold ring-1 ring-white/10 backdrop-blur sm:block lg:bottom-6">
+          <div className="absolute bottom-[8.5rem] left-3 z-[500] hidden rounded-xl bg-noche/85 p-2.5 text-[11px] font-semibold ring-1 ring-white/10 backdrop-blur sm:block lg:bottom-6">
             {[
               ["#00f0ff", "Próximo"],
               ["#ff3b6b", "En vivo"],
@@ -4034,28 +4203,37 @@ export default function LaPrevia() {
         </aside>
       </div>
 
-      {/* Navegación inferior (móvil) */}
-      <nav className="fixed inset-x-3 bottom-3 z-[1050] flex rounded-2xl border border-white/10 bg-noche-800/95 p-1.5 shadow-2xl backdrop-blur pb-[max(.375rem,env(safe-area-inset-bottom))] lg:hidden">
-        {(
-          [
-            ["mapa", "Mapa", MapaIcon],
-            ["partidos", "Partidos", CalendarDays],
-            ["planes", "Planes", Home],
-            ["stats", "Stats", BarChart3],
-            ["chat", "Chat", MessageCircle],
-          ] as const
-        ).map(([v, t, Icono]) => (
-          <button key={v} onClick={() => setVista(v)} className={`relative flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[11px] font-bold ${vista === v ? "text-noche" : "text-white/60"}`}>
-            {vista === v && <motion.span layoutId="tab-movil" className="absolute inset-0 rounded-xl bg-neon" transition={{ type: "spring", stiffness: 400, damping: 32 }} />}
-            <Icono className="relative h-5 w-5" />
-            <span className="relative">{t}</span>
-            {v === "partidos" && vivos.length > 0 && vista !== v && <span className="absolute right-[30%] top-1 h-2 w-2 rounded-full bg-vivo" />}
-          </button>
-        ))}
-      </nav>
+      {/* Cinta de MLB y NBA (computadora) */}
+      <div className="hidden border-t border-white/10 bg-noche/80 px-3 py-1.5 lg:block">
+        <CintaLigas datos={ligasHoy} onAbrir={() => setVerLigas(true)} />
+      </div>
+
+      {/* Cinta de MLB y NBA y navegación inferior (móvil) */}
+      <div className="fixed inset-x-3 bottom-3 z-[1050] flex flex-col gap-1.5 lg:hidden">
+        <CintaLigas datos={ligasHoy} onAbrir={() => setVerLigas(true)} />
+        <nav className="flex rounded-2xl border border-white/10 bg-noche-800/95 p-1.5 shadow-2xl backdrop-blur pb-[max(.375rem,env(safe-area-inset-bottom))]">
+          {(
+            [
+              ["mapa", "Mapa", MapaIcon],
+              ["partidos", "Partidos", CalendarDays],
+              ["planes", "Planes", Home],
+              ["stats", "Stats", BarChart3],
+              ["chat", "Chat", MessageCircle],
+            ] as const
+          ).map(([v, t, Icono]) => (
+            <button key={v} onClick={() => setVista(v)} className={`relative flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[11px] font-bold ${vista === v ? "text-noche" : "text-white/60"}`}>
+              {vista === v && <motion.span layoutId="tab-movil" className="absolute inset-0 rounded-xl bg-neon" transition={{ type: "spring", stiffness: 400, damping: 32 }} />}
+              <Icono className="relative h-5 w-5" />
+              <span className="relative">{t}</span>
+              {v === "partidos" && vivos.length > 0 && vista !== v && <span className="absolute right-[30%] top-1 h-2 w-2 rounded-full bg-vivo" />}
+            </button>
+          ))}
+        </nav>
+      </div>
 
       {/* Hojas y modales */}
       <AnimatePresence>
+        {verLigas && <HojaLigas key="ligas" datos={ligasHoy} onCerrar={() => setVerLigas(false)} />}
         {borrador && (
           <FormularioPin
             key="form"

@@ -42,3 +42,11 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .balon-bote, .balon-giro, .balon-sombra { animation-duration: 3s; }
 }
+
+/* Cinta de MLB y NBA: se desliza despacio hacia la izquierda (la tira va duplicada). */
+@keyframes cinta {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.cinta { animation: cinta 40s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .cinta { animation-duration: 240s; } }
