@@ -40,7 +40,6 @@ import {
   Search,
   Send,
   Share2,
-  Sparkles,
   Trash2,
   Trophy,
   UserRound,
@@ -1187,6 +1186,37 @@ function CopaDibujo() {
       <path d="M33 18c10 4 24 4 34 0M31 30c12 5 26 5 38 0M50 6c-6 8-6 32 0 40M50 6c6 8 6 32 0 40" fill="none" stroke="#c99a1e" strokeWidth="2" />
       <path d="M40 100c4 10 16 10 20 0" fill="none" stroke="#c99a1e" strokeWidth="2.5" />
     </g>
+  );
+}
+
+/** Logo: la orejona dentro de una hoja de calendario. */
+function IconoCopaCalendario() {
+  return (
+    <svg viewBox="0 0 40 40" className="h-full w-full" aria-hidden>
+      <defs>
+        <clipPath id="hoja">
+          <rect x="3" y="6" width="34" height="31" rx="6" />
+        </clipPath>
+      </defs>
+      <rect x="3" y="6" width="34" height="31" rx="6" fill="#fff" />
+      <g clipPath="url(#hoja)">
+        <rect x="3" y="6" width="34" height="9" fill="#00f0ff" />
+      </g>
+      <rect x="3" y="6" width="34" height="31" rx="6" fill="none" stroke="#0b0e28" strokeWidth="2" />
+      <path d="M3 15h34" stroke="#0b0e28" strokeWidth="1.6" />
+      <rect x="11" y="2.5" width="3.4" height="7" rx="1.7" fill="#0b0e28" />
+      <rect x="25.6" y="2.5" width="3.4" height="7" rx="1.7" fill="#0b0e28" />
+      {/* orejas (asas) */}
+      <g fill="none" strokeLinecap="round">
+        <path d="M14.6 18.4C8 16.8 7.6 25 14.6 24.6M25.4 18.4c6.6-1.6 7 6.6 0 6.2" stroke="#0b0e28" strokeWidth="4.2" />
+        <path d="M14.6 18.4C8 16.8 7.6 25 14.6 24.6M25.4 18.4c6.6-1.6 7 6.6 0 6.2" stroke="#f2c94c" strokeWidth="2" />
+      </g>
+      {/* copa, tallo y base */}
+      <path d="M14 17.4h12c.2 6.2-2 9.6-6 10.4-4-.8-6.2-4.2-6-10.4z" fill="#f2c94c" stroke="#0b0e28" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M17 20c.4 3 1.4 4.4 3 5" stroke="#fff3b8" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      <path d="M18.6 27.6h2.8l.6 4h-4z" fill="#f2c94c" stroke="#0b0e28" strokeWidth="1.4" strokeLinejoin="round" />
+      <rect x="15" y="31.4" width="10" height="3.4" rx="1.2" fill="#f2c94c" stroke="#0b0e28" strokeWidth="1.5" />
+    </svg>
   );
 }
 
@@ -2798,8 +2828,8 @@ export default function LaPrevia() {
       {/* Encabezado */}
       <header className="z-[1000] flex items-center gap-3 border-b border-white/10 bg-noche/80 px-4 py-2.5 backdrop-blur pt-[max(.625rem,env(safe-area-inset-top))]">
         <div className="flex items-center gap-2">
-          <motion.div whileHover={{ rotate: 20 }} className="grid h-9 w-9 place-items-center rounded-xl bg-neon text-noche shadow-neon">
-            <Sparkles className="h-5 w-5" />
+          <motion.div whileHover={{ rotate: 8, scale: 1.08 }} className="h-10 w-10 drop-shadow-[0_0_8px_rgba(0,240,255,.45)]">
+            <IconoCopaCalendario />
           </motion.div>
           <div className="leading-none">
             <p className="font-display text-xl font-extrabold uppercase tracking-wide">
