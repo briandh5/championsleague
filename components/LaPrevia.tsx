@@ -1060,7 +1060,7 @@ function Estrella({ x, y, r }: { x: number; y: number; r: number }) {
     const rr = i % 2 ? r * 0.45 : r;
     return `${x + rr * Math.cos(a)},${y + rr * Math.sin(a)}`;
   }).join(" ");
-  return <polygon points={pts} fill="#f2c94c" stroke="#0b0e28" strokeWidth="1.5" strokeLinejoin="round" />;
+  return <polygon points={pts} fill="#f2c94c" stroke="#0b0e28" strokeWidth="2" strokeLinejoin="round" />;
 }
 
 function MapaSvg({
@@ -1422,26 +1422,22 @@ function MapaSvg({
             return visible(s) ? etiqueta(r.nombre, s, "region") : null;
           })}
 
-          {/* Francia: dos estrellas y la leyenda */}
-          {visible(francia, 120) && (
-            <g transform={`translate(${francia.x} ${francia.y})`} pointerEvents="none">
-              <Estrella x={-9} y={ke >= 2 ? -14 : -4} r={ke >= 2 ? 8 : 6} />
-              <Estrella x={9} y={ke >= 2 ? -14 : -4} r={ke >= 2 ? 8 : 6} />
-              {ke >= 2 && etiqueta("Francia", { x: 0, y: 4 }, "pais")}
-            </g>
-          )}
-
-          {(() => {
-              const s = aPantalla(-5.5, 48.2);
-              return visible(s, 200) ? (
-                <g transform={`translate(${s.x} ${s.y})`} pointerEvents="none">
-                  <rect x={-176} y={-11} width={172} height={22} rx={11} fill="#0b0e28" stroke="#f2c94c" strokeWidth={2} />
-                  <text x={-90} y={4.5} textAnchor="middle" fontSize={12} fontWeight={800} fill="#f2c94c" fontFamily="var(--font-cuerpo), sans-serif">
-                    Fuerza a la tierra del bi
-                  </text>
-                  <path d="M-4 0h10" stroke="#f2c94c" strokeWidth={2} />
+          {/* Francia: dos estrellas sobre el escudo del PSG */}
+          {visible(francia, 120) &&
+            (() => {
+              const t = ke >= 2 ? 52 : 40;
+              return (
+                <g transform={`translate(${francia.x} ${francia.y})`} pointerEvents="none">
+                  <Estrella x={-13} y={-t / 2 - 6} r={ke >= 2 ? 14 : 12} />
+                  <Estrella x={13} y={-t / 2 - 6} r={ke >= 2 ? 14 : 12} />
+                  <foreignObject x={-t / 2} y={-t / 2} width={t} height={t}>
+                    <div title="Paris Saint-Germain" style={{ width: t, height: t }}>
+                      <Escudo equipo={EQUIPOS.psg} tam={t} />
+                    </div>
+                  </foreignObject>
+                  {ke >= 2 && etiqueta("Francia", { x: 0, y: t / 2 + 10 }, "pais")}
                 </g>
-              ) : null;
+              );
             })()}
 
           {/* Escudos de los clubes en su estadio al acercar */}
