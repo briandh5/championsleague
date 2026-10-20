@@ -1,9 +1,9 @@
-import type { Fase, Partido } from "@/components/LaPrevia";
+import type { Fase, Gol, Partido } from "@/components/LaPrevia";
 
 /**
- * Partidos reales de la Champions desde TheSportsDB (liga 4480).
- * La llave gratuita de prueba es "123"; con una llave propia (THESPORTSDB_KEY) llegan más partidos.
- * Si la fuente no responde o trae muy pocos partidos, la app usa su calendario de ejemplo.
+ * Resultados reales de la Champions: marcador, minuto y goleadores.
+ * Fuente principal: el marcador público de ESPN (sin llave). Si no responde, TheSportsDB (liga 4480, solo marcador).
+ * La app cruza estos datos con su calendario oficial por fecha y nombre de los equipos.
  */
 export const revalidate = 60;
 
@@ -66,7 +66,87 @@ async function pedir(llave: string, ruta: string): Promise<EventoTSDB[]> {
   return j.events ?? [];
 }
 
+/* ───────── ESPN ───────── */
+
+interface CompetidorESPN {
+  homeAway: "home" | "away";
+  score?: string;
+  team: { id: string; displayName: string; abbreviation?: string };
+}
+interface DetalleESPN {
+  type?: { text?: string };
+  clock?: { displayValue?: string };
+  team?: { id?: string };
+  scoringPlay?: boolean;
+  penaltyKick?: boolean;
+  ownGoal?: boolean;
+  athletesInvolved?: { displayName?: string }[];
+}
+interface EventoESPN {
+  id: string;
+  date: string;
+  competitions: {
+    competitors: CompetidorESPN[];
+    status: { displayClock?: string; type: { name: string; completed?: boolean } };
+    details?: DetalleESPN[];
+    venue?: { fullName?: string; address?: { city?: string } };
+  }[];
+}
+
+function estadoESPN(nombre: string): Partido["estado"] {
+  if (/FULL_TIME|FINAL|END_OF_EXTRATIME|PENALTIES_FINAL/.test(nombre)) return "final";
+  if (/IN_PROGRESS|HALFTIME|FIRST_HALF|SECOND_HALF|EXTRA_TIME|SHOOTOUT|OVERTIME/.test(nombre)) return "vivo";
+  return "programado";
+}
+
+async function desdeESPN(): Promise<Partido[]> {
+  // Toda la temporada en una sola llamada.
+  const r = await fetch("https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=20260701-20270630&limit=500", {
+    next: { revalidate: 60 },
+  });
+  if (!r.ok) return [];
+  const j = (await r.json()) as { events?: EventoESPN[] };
+  return (j.events ?? []).flatMap((e) => {
+    const c = e.competitions?.[0];
+    const casa = c?.competitors.find((x) => x.homeAway === "home");
+    const fuera = c?.competitors.find((x) => x.homeAway === "away");
+    if (!c || !casa || !fuera) return [];
+    const st = estadoESPN(c.status.type.name);
+    const goles: Gol[] = (c.details ?? [])
+      .filter((d) => d.scoringPlay)
+      .map((d) => ({
+        min: d.clock?.displayValue ?? "",
+        jugador: d.athletesInvolved?.[0]?.displayName ?? "Gol",
+        lado: d.team?.id === fuera.team.id ? "V" : "L",
+        ...(d.penaltyKick ? { tipo: "penal" as const } : d.ownGoal ? { tipo: "propia" as const } : {}),
+      }));
+    const conMarcador = st !== "programado";
+    return [
+      {
+        id: `espn-${e.id}`,
+        fase: "Fase de liga" as Fase,
+        inicio: new Date(e.date).toISOString(),
+        local: equipo(casa.team.id, casa.team.displayName),
+        visita: equipo(fuera.team.id, fuera.team.displayName),
+        estadio: c.venue?.fullName ?? "",
+        ciudad: c.venue?.address?.city ?? "",
+        estado: st,
+        golesLocal: conMarcador ? Number(casa.score ?? 0) : undefined,
+        golesVisita: conMarcador ? Number(fuera.score ?? 0) : undefined,
+        minuto: st === "vivo" ? (/HALFTIME/.test(c.status.type.name) ? "Descanso" : c.status.displayClock) : undefined,
+        goles,
+      },
+    ];
+  });
+}
+
 export async function GET() {
+  try {
+    const espn = await desdeESPN();
+    if (espn.length) return Response.json({ fuente: "espn", partidos: espn });
+  } catch {
+    /* sigue con TheSportsDB */
+  }
   const llave = process.env.THESPORTSDB_KEY || "123";
   try {
     const [proximos, pasados] = await Promise.all([

@@ -76,6 +76,15 @@ export interface Partido {
   golesLocal?: number;
   golesVisita?: number;
   minuto?: string;
+  goles?: Gol[];
+}
+
+/** Gol con minuto y autor; `lado` dice si lo anotó el local (L) o la visita (V). */
+export interface Gol {
+  min: string;
+  jugador: string;
+  lado: "L" | "V";
+  tipo?: "penal" | "propia";
 }
 
 type TipoLugar = "bar" | "restaurante" | "casa";
@@ -368,6 +377,9 @@ function conEstado(p: Partido, ahora: number, demo: boolean): Partido {
 const normal = (s: string) =>
   s
     .toLowerCase()
+    .replace(/ø/g, "o")
+    .replace(/æ/g, "ae")
+    .replace(/ß/g, "ss")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\b(fc|cf|ac|ssc|sl|sk|rc|rb|afc|as|vfb)\b/g, "")
@@ -375,7 +387,8 @@ const normal = (s: string) =>
 const mismoEquipo = (a: string, b: string) => {
   const x = normal(a);
   const y = normal(b);
-  return !!x && !!y && (x === y || x.includes(y) || y.includes(x) || x.slice(0, 5) === y.slice(0, 5));
+  // Prefijo de 6 letras para "Bayern München"/"Bayern Munich" o "Slavia Praha"/"Slavia Prague", sin confundir a los dos Manchester.
+  return !!x && !!y && (x === y || x.includes(y) || y.includes(x) || (x.slice(0, 6) === y.slice(0, 6) && !x.startsWith("manche")));
 };
 
 /* ────────────────────────────── Utilidades ────────────────────────────── */
@@ -529,12 +542,26 @@ function usePartidos(ahora: number, demo: boolean) {
     () =>
       CALENDARIO.map((base) => {
         const p = conEstado(base, ahora, demo);
-        if (demo || p.estado === "programado" || p.golesLocal !== undefined || p.local.id === "tbd") return p;
+        if (demo || p.local.id === "tbd") return p;
         const x = envivo.find(
-          (e) => claveDia(e.inicio) === claveDia(p.inicio) && mismoEquipo(e.local.nombre, p.local.nombre) && mismoEquipo(e.visita.nombre, p.visita.nombre),
+          (e) =>
+            Math.abs(Date.parse(e.inicio) - Date.parse(p.inicio)) < 36 * 3600000 &&
+            mismoEquipo(e.local.nombre, p.local.nombre) &&
+            mismoEquipo(e.visita.nombre, p.visita.nombre),
         );
-        if (!x || x.golesLocal === undefined) return p;
-        return { ...p, golesLocal: x.golesLocal, golesVisita: x.golesVisita, estado: x.estado === "final" ? "final" : p.estado, minuto: x.estado === "vivo" ? x.minuto ?? p.minuto : p.minuto };
+        if (!x || x.golesLocal === undefined || x.estado === "programado") return p;
+        // Resultado oficial ya cargado: solo se agregan los goleadores si el marcador coincide.
+        if (p.estado === "final" && base.golesLocal !== undefined) {
+          return x.golesLocal === p.golesLocal && x.golesVisita === p.golesVisita && x.goles?.length ? { ...p, goles: x.goles } : p;
+        }
+        return {
+          ...p,
+          golesLocal: x.golesLocal,
+          golesVisita: x.golesVisita,
+          estado: x.estado,
+          minuto: x.estado === "vivo" ? x.minuto ?? p.minuto : undefined,
+          ...(x.goles?.length ? { goles: x.goles } : {}),
+        };
       }),
     [ahora, demo, envivo],
   );
@@ -673,6 +700,29 @@ function Boton({
 
 /* ─────────────────────────── Tarjeta de partido ─────────────────────────── */
 
+/** Goleadores bajo el marcador: los del local a la izquierda y los de la visita a la derecha. */
+function Goleadores({ goles }: { goles: Gol[] }) {
+  const lista = (lado: Gol["lado"]) =>
+    goles
+      .filter((g) => g.lado === lado)
+      .map((g, i) => (
+        <li key={i} className={`flex items-baseline gap-1 ${lado === "V" ? "flex-row-reverse text-right" : ""}`}>
+          <span className="shrink-0 text-[10px]">⚽</span>
+          <span className="min-w-0 truncate">
+            {g.jugador}
+            {g.tipo === "penal" ? " (p)" : g.tipo === "propia" ? " (a.g.)" : ""}
+          </span>
+          <span className="shrink-0 tabular-nums text-white/40">{g.min}</span>
+        </li>
+      ));
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-3 border-t border-white/10 pt-2.5 text-[11px] font-semibold text-white/75" aria-label="Goleadores">
+      <ul className="min-w-0 space-y-0.5">{lista("L")}</ul>
+      <ul className="min-w-0 space-y-0.5">{lista("V")}</ul>
+    </div>
+  );
+}
+
 function TarjetaPartido({
   p,
   ahora,
@@ -720,6 +770,8 @@ function TarjetaPartido({
           <Posicion f={posiciones.get(p.visita.id)} />
         </div>
       </div>
+
+      {!!p.goles?.length && <Goleadores goles={p.goles} />}
 
       <p className="mt-3 truncate text-center text-xs text-white/45">
         {p.estadio}
@@ -913,7 +965,13 @@ function Calendario({
   onCompartir: (p: Partido) => void;
 }) {
   const proximo = useMemo(
-    () => partidos.find((p) => p.estado === "vivo") ?? partidos.find((p) => p.estado === "programado") ?? partidos[partidos.length - 1],
+    // Si hoy hay partidos se abre en hoy (aunque ya hayan terminado, para ver los resultados).
+    () =>
+      partidos.find((p) => p.estado === "vivo") ??
+      partidos.find((p) => claveDia(p.inicio) === claveDia(new Date(ahora).toISOString())) ??
+      partidos.find((p) => p.estado === "programado") ??
+      partidos[partidos.length - 1],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [partidos],
   );
   const enfocado = foco ? partidos.find((p) => p.id === foco) : undefined;
@@ -3444,7 +3502,7 @@ export default function LaPrevia() {
               fuente === "demo" ? "bg-oro/15 text-oro" : "bg-neon/15 text-neon"
             }`}
           >
-            {fuente === "demo" ? "Calendario oficial · marcador demo" : "Calendario oficial UEFA"}
+            {fuente === "demo" ? "Calendario oficial · marcador demo" : fuente === "envivo" ? "Calendario UEFA · resultados en vivo" : "Calendario oficial UEFA"}
           </span>
           <button
             onClick={pedirPermiso}

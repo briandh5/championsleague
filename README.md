@@ -16,7 +16,7 @@ Framer Motion · Lucide · Supabase (Postgres + Realtime). Toda la interfaz vive
 | Mapa caricatura | Dibujo SVG del mundo (Natural Earth + estados de EE. UU. incluidos en la app, sin APIs ni mosaicos). Países vecinos con colores distintos y nombres que aparecen al acercar. México por regiones (El norte, CDMX, Veracruz, Oaxaca y sus playas, Riviera Maya y alrededores, Resto del sur) y EE. UU. por regiones (West Coast, Lo robado, Norte, East Coast). Francia en dorado con dos estrellas y el escudo del PSG; España con la Copa de fondo; al acercar, el escudo de cada club en su estadio; al tocarlo sale una burbuja con su historia en la Champions (títulos con año y estrella, o su mejor resultado). |
 | Pin personalizado | "Poner mi pin" → tocas el dibujo donde quieras (no usa tu ubicación) → formulario con partido, País, Estado, Ciudad, tipo de lugar, nombre del lugar, `#Hashtag` único y anfitrión. |
 | Buscador flotante | Filtra los pines por hashtag, nombre de amigo, lugar o ciudad. Muestra los hashtags más populares. |
-| Calendario | Fases (Fase de liga, Play-off, Octavos, Cuartos, Semifinal, Final), tira de días y tarjetas con escudos, estado **En vivo** con marcador y minuto o **Próximamente** con hora local. |
+| Calendario | Abre en el día de hoy si hay partidos. Resultados reales con goleadores (minuto, penal o autogol) bajo cada marcador. Fases (Fase de liga, Play-off, Octavos, Cuartos, Semifinal, Final), tira de días y tarjetas con escudos, estado **En vivo** con marcador y minuto o **Próximamente** con hora local. |
 | Recordatorios | 1 día y 1 hora antes, configurables por plan. Aviso dentro de la app y notificación del navegador. El botón **.ics** descarga el evento con las dos alarmas para que lleguen aunque la app esté cerrada. |
 | Compartir plan | Enlace dinámico con el mensaje "¿Qué plan para Equipo A vs Equipo B?". Quien lo abre ve el pin y puede apuntarse. WhatsApp, Telegram, X o copiar. En celular usa el menú nativo de compartir. |
 | Google Calendar | Botón que abre el evento con fecha, hora, lugar y lista de amigos ya llenos. |
@@ -31,10 +31,11 @@ Framer Motion · Lucide · Supabase (Postgres + Realtime). Toda la interfaz vive
   (36 clubes, 8 jornadas) con fecha y hora, resultados de las jornadas 1 y 2, y las fechas de
   play-off, octavos, cuartos, semifinales y la final (5 de junio de 2027, Metropolitano). Vive en
   `FASE_LIGA` dentro del componente; para cargar un resultado nuevo se agrega `=goles:goles` al cruce.
-- El estado (Próximamente / En vivo / Final) se calcula con la hora del partido. El marcador en vivo
-  se toma de **TheSportsDB** (`app/api/partidos/route.ts`) cuando responde; si no, la tarjeta dice
-  "en juego" o "resultado pendiente" sin inventar marcador. Con una llave propia de TheSportsDB pon
-  `THESPORTSDB_KEY` en Vercel.
+- El estado (Próximamente / En vivo / Final) se calcula con la hora del partido. Los **resultados reales,
+  el minuto y los goleadores** llegan del marcador público de **ESPN** (`app/api/partidos/route.ts`, sin
+  llave) y se actualizan cada minuto; la tabla de Stats se recalcula con ellos. Si ESPN no responde se usa
+  TheSportsDB (solo marcador, llave opcional `THESPORTSDB_KEY`), y si nada responde la tarjeta dice
+  "en juego" o "resultado pendiente" sin inventar marcador.
 - Escudos en alta resolución desde el CDN de API-Football; si alguno no carga se dibuja un
   escudo con los colores del club.
 - **Con Supabase** (variables `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY`): pines,
