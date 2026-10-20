@@ -21,6 +21,7 @@ Framer Motion · Lucide · Supabase (Postgres + Realtime). Toda la interfaz vive
 | Compartir plan | Enlace dinámico con el mensaje "¿Qué plan para Equipo A vs Equipo B?". Quien lo abre ve el pin y puede apuntarse. WhatsApp, Telegram, X o copiar. En celular usa el menú nativo de compartir. |
 | Google Calendar | Botón que abre el evento con fecha, hora, lugar y lista de amigos ya llenos. |
 | Confirmados y chat | "¡Me apunto!", chat rápido por plan y botón para borrar el plan (solo desde el dispositivo que lo creó). El mapa arranca vacío: solo aparecen los planes que alguien agrega. |
+| Stats | Tabla de la fase de liga (36 clubes) calculada con los resultados oficiales y el marcador en vivo: PJ, G, E, P, DG y puntos, con zonas de octavos, play-off y eliminados. En Partidos, bajo cada equipo se ve su posición y puntos para saber qué lugares se enfrentan. |
 | Chat en vivo | Sala general para ponerse de acuerdo en el momento, con cuántas personas están conectadas y sus nombres. |
 
 ## Datos

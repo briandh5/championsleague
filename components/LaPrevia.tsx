@@ -17,6 +17,7 @@ import mundoTopo from "world-atlas/countries-110m.json";
 import eeuuTopo from "us-atlas/states-10m.json";
 import {
   Bell,
+  BarChart3,
   BellRing,
   CalendarDays,
   CalendarPlus,
@@ -106,7 +107,7 @@ interface Plan {
   creado: string;
 }
 
-type Vista = "mapa" | "partidos" | "planes" | "chat";
+type Vista = "mapa" | "partidos" | "planes" | "chat" | "stats";
 type Fuente = "oficial" | "envivo" | "demo";
 
 interface Aviso {
@@ -672,10 +673,12 @@ function TarjetaPartido({
   onArmar,
   onVerPlan,
   onCompartir,
+  posiciones,
 }: {
   p: Partido;
   ahora: number;
   planes: Plan[];
+  posiciones: Map<string, FilaTabla>;
   onArmar: (p: Partido) => void;
   onVerPlan: (pl: Plan) => void;
   onCompartir: (p: Partido) => void;
@@ -701,11 +704,13 @@ function TarjetaPartido({
         <div className="flex min-w-0 flex-col items-center gap-1.5 text-center">
           <Escudo equipo={p.local} tam={44} />
           <span className="line-clamp-2 text-sm font-bold leading-tight">{p.local.nombre}</span>
+          <Posicion f={posiciones.get(p.local.id)} />
         </div>
         <Marcador p={p} />
         <div className="flex min-w-0 flex-col items-center gap-1.5 text-center">
           <Escudo equipo={p.visita} tam={44} />
           <span className="line-clamp-2 text-sm font-bold leading-tight">{p.visita.nombre}</span>
+          <Posicion f={posiciones.get(p.visita.id)} />
         </div>
       </div>
 
@@ -751,6 +756,134 @@ function TarjetaPartido({
   );
 }
 
+/* ─────────────────────────── Tabla de posiciones ─────────────────────────── */
+
+interface FilaTabla {
+  equipo: Equipo;
+  pos: number;
+  pj: number;
+  g: number;
+  e: number;
+  p: number;
+  gf: number;
+  gc: number;
+  pts: number;
+}
+
+/** Tabla de la fase de liga con los partidos terminados y los que están en juego (cuenta el marcador del momento). */
+function calcularTabla(partidos: Partido[]): FilaTabla[] {
+  const filas = new Map<string, FilaTabla>();
+  const fila = (eq: Equipo) => {
+    let f = filas.get(eq.id);
+    if (!f) filas.set(eq.id, (f = { equipo: eq, pos: 0, pj: 0, g: 0, e: 0, p: 0, gf: 0, gc: 0, pts: 0 }));
+    return f;
+  };
+  for (const m of partidos) {
+    if (m.fase !== "Fase de liga" || m.local.id === "tbd") continue;
+    const l = fila(m.local);
+    const v = fila(m.visita);
+    if (m.estado === "programado" || m.golesLocal === undefined || m.golesVisita === undefined) continue;
+    const a = m.golesLocal;
+    const b = m.golesVisita;
+    l.pj++, v.pj++;
+    l.gf += a, l.gc += b, v.gf += b, v.gc += a;
+    if (a > b) (l.g++, l.pts += 3, v.p++);
+    else if (a < b) (v.g++, v.pts += 3, l.p++);
+    else (l.e++, v.e++, l.pts++, v.pts++);
+  }
+  const orden = [...filas.values()].sort(
+    (x, y) => y.pts - x.pts || y.gf - y.gc - (x.gf - x.gc) || y.gf - x.gf || x.equipo.nombre.localeCompare(y.equipo.nombre, "es"),
+  );
+  orden.forEach((f, i) => (f.pos = i + 1));
+  return orden;
+}
+
+const zonaTabla = (pos: number) => (pos <= 8 ? "octavos" : pos <= 24 ? "playoff" : "fuera");
+const COLOR_ZONA = { octavos: "#2ee6a6", playoff: "#f2c94c", fuera: "#ff4d6d" } as const;
+
+function Posicion({ f }: { f?: FilaTabla }) {
+  if (!f) return null;
+  return (
+    <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-white/[.07] px-2 py-0.5 text-[11px] font-extrabold tabular-nums text-white/70">
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: COLOR_ZONA[zonaTabla(f.pos)] }} />
+      {f.pos}º · {f.pts} pts
+    </span>
+  );
+}
+
+function Stats({ tabla, onPartidos }: { tabla: FilaTabla[]; onPartidos: () => void }) {
+  const jugados = tabla.reduce((n, f) => n + f.pj, 0) / 2;
+  const cab = "px-1.5 py-2 text-center";
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-28 pt-4 lg:pb-6">
+      <div className="px-1">
+        <h2 className="font-display text-2xl font-extrabold uppercase tracking-wide">Tabla · Fase de liga</h2>
+        <p className="text-xs text-white/50">Se actualiza con cada marcador, también en vivo. Los 36 clubes en una sola tabla.</p>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11px] font-semibold text-white/60">
+        {(
+          [
+            ["octavos", "1-8 Octavos"],
+            ["playoff", "9-24 Play-off"],
+            ["fuera", "25-36 Eliminados"],
+          ] as const
+        ).map(([z, t]) => (
+          <span key={z} className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{ background: COLOR_ZONA[z] }} /> {t}
+          </span>
+        ))}
+      </div>
+      <div className="mt-3 overflow-hidden rounded-2xl border border-white/10 bg-noche-800/80">
+        <table className="w-full table-fixed text-sm">
+          <thead className="bg-white/[.05] text-[10px] font-extrabold uppercase tracking-wider text-white/45">
+            <tr>
+              <th className={`${cab} w-9`}>#</th>
+              <th className="px-1.5 py-2 text-left">Club</th>
+              <th className={`${cab} w-7`}>PJ</th>
+              <th className={`${cab} hidden w-7 min-[380px]:table-cell`}>G</th>
+              <th className={`${cab} hidden w-7 min-[380px]:table-cell`}>E</th>
+              <th className={`${cab} hidden w-7 min-[380px]:table-cell`}>P</th>
+              <th className={`${cab} w-11`}>DG</th>
+              <th className={`${cab} w-9`}>Pts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tabla.map((f) => {
+              const dg = f.gf - f.gc;
+              const z = zonaTabla(f.pos);
+              return (
+                <tr key={f.equipo.id} className={`border-t border-white/5 ${f.pos === 8 || f.pos === 24 ? "border-b-2 border-b-white/25" : ""}`}>
+                  <td className="py-1.5 text-center font-display text-base font-bold tabular-nums" style={{ boxShadow: `inset 3px 0 0 ${COLOR_ZONA[z]}` }}>
+                    {f.pos}
+                  </td>
+                  <td className="px-1.5 py-1.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Escudo equipo={f.equipo} tam={24} />
+                      <span className="truncate font-bold">{f.equipo.nombre}</span>
+                    </div>
+                  </td>
+                  <td className="text-center tabular-nums text-white/70">{f.pj}</td>
+                  <td className="hidden text-center tabular-nums text-white/70 min-[380px]:table-cell">{f.g}</td>
+                  <td className="hidden text-center tabular-nums text-white/70 min-[380px]:table-cell">{f.e}</td>
+                  <td className="hidden text-center tabular-nums text-white/70 min-[380px]:table-cell">{f.p}</td>
+                  <td className="text-center tabular-nums text-white/70">{dg > 0 ? `+${dg}` : dg}</td>
+                  <td className="text-center font-display text-base font-extrabold tabular-nums text-neon">{f.pts}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 px-1 text-[11px] text-white/40">
+        {jugados} partidos contados. Desempate: puntos, diferencia de gol y goles a favor. La tabla oficial de uefa.com puede aplicar criterios adicionales.
+      </p>
+      <button onClick={onPartidos} className="mt-3 w-full rounded-xl bg-white/[.06] py-2.5 text-sm font-bold text-white/80 active:scale-[.98]">
+        Ver partidos
+      </button>
+    </div>
+  );
+}
+
 /* ─────────────────────────── Calendario ─────────────────────────── */
 
 function Calendario({
@@ -758,6 +891,7 @@ function Calendario({
   ahora,
   planes,
   foco,
+  posiciones,
   onArmar,
   onVerPlan,
   onCompartir,
@@ -766,6 +900,7 @@ function Calendario({
   ahora: number;
   planes: Plan[];
   foco: string | null;
+  posiciones: Map<string, FilaTabla>;
   onArmar: (p: Partido) => void;
   onVerPlan: (pl: Plan) => void;
   onCompartir: (p: Partido) => void;
@@ -876,6 +1011,7 @@ function Calendario({
                 p={p}
                 ahora={ahora}
                 planes={planes.filter((pl) => pl.partidoId === p.id)}
+                posiciones={posiciones}
                 onArmar={onArmar}
                 onVerPlan={onVerPlan}
                 onCompartir={onCompartir}
@@ -2291,6 +2427,8 @@ export default function LaPrevia() {
   const ahora = useAhora(desfase);
   const { partidos, fuente } = usePartidos(ahora, demo);
   const partidosPorId = useMemo(() => new Map(partidos.map((p) => [p.id, p])), [partidos]);
+  const tabla = useMemo(() => calcularTabla(partidos), [partidos]);
+  const posiciones = useMemo(() => new Map(tabla.map((f) => [f.equipo.id, f])), [tabla]);
 
   const [planes, setPlanes] = useState<Plan[]>([]);
   const [yo, setYo] = useState("");
@@ -2636,7 +2774,9 @@ export default function LaPrevia() {
   };
 
   const panelLateral =
-    vista === "chat" ? (
+    vista === "stats" ? (
+      <Stats tabla={tabla} onPartidos={() => setVista("partidos")} />
+    ) : vista === "chat" ? (
       <ChatEnVivo mensajes={general} yo={yo} enLinea={enLinea} onEnviar={(t) => conNombre((n) => mandarMensaje(SALA_GENERAL, n, t))} />
     ) : vista === "planes" ? (
       <ListaPlanes planes={planes} partidosPorId={partidosPorId} ahora={ahora} yo={yo} onAbrir={(pl) => (abrirPlan(pl), window.innerWidth < 1024 && setVista("mapa"))} onNuevo={() => empezarPin()} />
@@ -2646,6 +2786,7 @@ export default function LaPrevia() {
         ahora={ahora}
         planes={planes}
         foco={focoPartido}
+        posiciones={posiciones}
         onArmar={(p) => empezarPin(p.id)}
         onVerPlan={(pl) => (abrirPlan(pl), window.innerWidth < 1024 && setVista("mapa"))}
         onCompartir={compartirPartido}
@@ -2819,7 +2960,8 @@ export default function LaPrevia() {
               [
                 ["partidos", "Calendario", CalendarDays],
                 ["planes", "Planes", ListChecks],
-                ["chat", "Chat en vivo", MessageCircle],
+                ["stats", "Stats", BarChart3],
+                ["chat", "Chat", MessageCircle],
               ] as const
             ).map(([v, t, Icono]) => {
               const activo = v === "partidos" ? vista === "partidos" || vista === "mapa" : vista === v;
@@ -2848,6 +2990,7 @@ export default function LaPrevia() {
             ["mapa", "Mapa", MapaIcon],
             ["partidos", "Partidos", CalendarDays],
             ["planes", "Planes", Home],
+            ["stats", "Stats", BarChart3],
             ["chat", "Chat", MessageCircle],
           ] as const
         ).map(([v, t, Icono]) => (
