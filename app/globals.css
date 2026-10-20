@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+  background: #0b0e28;
+}
+
+/* Cielo de estrellas sutil, guiño al balón estrellado */
+.cielo {
+  background-color: #0b0e28;
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, rgba(255, 255, 255, 0.55) 50%, transparent 51%),
+    radial-gradient(1px 1px at 72% 12%, rgba(255, 255, 255, 0.4) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 42% 64%, rgba(0, 240, 255, 0.5) 50%, transparent 51%),
+    radial-gradient(1px 1px at 88% 78%, rgba(255, 255, 255, 0.35) 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 22% 86%, rgba(242, 201, 76, 0.45) 50%, transparent 51%),
+    radial-gradient(120% 80% at 50% -10%, #1d2560 0%, #0b0e28 60%);
+}
+
+/* Mapa estilo caricatura: Voyager saturado + trama de puntos tipo cómic */
+.mapa-caricatura .leaflet-tile-pane {
+  filter: saturate(1.7) contrast(1.12) brightness(1.04) hue-rotate(-8deg);
+}
+.mapa-noche .leaflet-tile-pane {
+  filter: hue-rotate(195deg) saturate(1.4) brightness(1.1);
+}
+.mapa-caricatura::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 401;
+  background-image: radial-gradient(rgba(11, 14, 40, 0.13) 1px, transparent 1.2px);
+  background-size: 6px 6px;
+  mix-blend-mode: multiply;
+}
+.leaflet-container {
+  background: #a9def0;
+  font-family: var(--font-cuerpo), system-ui, sans-serif;
+}
+.mapa-noche.leaflet-container {
+  background: #0b0e28;
+}
+.leaflet-control-attribution {
+  font-size: 9px !important;
+  background: rgba(11, 14, 40, 0.7) !important;
+  color: #9aa3d6 !important;
+}
+.leaflet-control-attribution a {
+  color: #7df8ff !important;
+}
+.leaflet-control-zoom a {
+  background: #0b0e28 !important;
+  color: #00f0ff !important;
+  border-color: #1d2560 !important;
+}
+
+.pin-previa {
+  background: none;
+  border: none;
+}
+.pin-previa .pin-cuerpo {
+  transform-origin: 50% 100%;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  filter: drop-shadow(3px 4px 0 rgba(6, 8, 26, 0.55));
+}
+.pin-previa:hover .pin-cuerpo,
+.pin-previa.activo .pin-cuerpo {
+  transform: scale(1.18) translateY(-3px);
+}
+.pin-previa.nuevo .pin-cuerpo {
+  animation: caer 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes caer {
+  0% { transform: translateY(-60px) scale(0.6); opacity: 0; }
+  60% { transform: translateY(4px) scale(1.08, 0.92); opacity: 1; }
+  100% { transform: translateY(0) scale(1); }
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }
