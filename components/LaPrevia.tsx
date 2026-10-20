@@ -2318,6 +2318,7 @@ export default function LaPrevia() {
   // En modo nube: recordatorios y llaves para borrar viven solo en este dispositivo.
   const recordatoriosRef = useRef<Recordatorios>({});
   const canal = useRef<RealtimeChannel | null>(null);
+  const sinNube = useRef(false);
 
   const avisar = useCallback((a: Omit<Aviso, "id">) => {
     const id = uid();
@@ -2384,8 +2385,16 @@ export default function LaPrevia() {
         setPlanes(r.planes);
         setGeneral(r.general);
       }
-    } catch {
-      avisar({ titulo: "Sin conexión con la nube", texto: "Reintentando…", tono: "vivo" });
+      sinNube.current = false;
+    } catch (e) {
+      if (sinNube.current) return;
+      sinNube.current = true;
+      const msg = (e as { message?: string })?.message ?? "";
+      avisar({
+        titulo: "Sin conexión con la nube",
+        texto: /relation|schema cache|does not exist/i.test(msg) ? "Falta correr supabase/schema.sql en Supabase." : msg || "Reintentando…",
+        tono: "vivo",
+      });
     }
   }, [avisar]);
 
@@ -2415,11 +2424,14 @@ export default function LaPrevia() {
         }
       });
     canal.current = c;
+    // Respaldo por si el tiempo real tarda o se corta: se pone al día cada 8 s.
+    const respaldo = setInterval(() => document.visibilityState === "visible" && recargar(), 8000);
     // Al volver a la app desde segundo plano (móviles) se pone al día.
     const visible = () => document.visibilityState === "visible" && pronto();
     document.addEventListener("visibilitychange", visible);
     return () => {
       clearTimeout(espera);
+      clearInterval(respaldo);
       document.removeEventListener("visibilitychange", visible);
       canal.current = null;
       nube.removeChannel(c);
@@ -2592,7 +2604,7 @@ export default function LaPrevia() {
     else cambiarPlan(sala, (x) => ({ ...x, chat: [...x.chat, m] }));
     if (!NUBE) return;
     const { error } = await NUBE.from("mensajes").insert({ sala, autor, texto });
-    if (error) fallo("Tu mensaje no se envió.");
+    if (error) fallo(`Tu mensaje no se envió: ${error.message}`);
   };
 
   const cambiarRecordatorios = (pl: Plan, r: Plan["recordatorios"]) => {
