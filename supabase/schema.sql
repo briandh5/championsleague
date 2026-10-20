@@ -103,3 +103,74 @@ begin
     end if;
   end loop;
 end $$;
+
+-- ───────── Editar y borrar mensajes propios, y mandar fotos ─────────
+alter table public.mensajes add column if not exists imagen text;
+alter table public.mensajes add column if not exists editado boolean not null default false;
+-- Un mensaje puede ser solo foto: el texto ya no es obligatorio.
+alter table public.mensajes drop constraint if exists mensajes_texto_check;
+alter table public.mensajes add constraint mensajes_texto_check check (char_length(texto) <= 500);
+alter table public.mensajes drop constraint if exists mensajes_imagen_check;
+alter table public.mensajes add constraint mensajes_imagen_check check (imagen is null or char_length(imagen) <= 500);
+
+-- Llave secreta de cada mensaje: solo el dispositivo que lo mandó puede editarlo o borrarlo.
+create table if not exists public.mensajes_claves (
+  mensaje_id uuid primary key references public.mensajes (id) on delete cascade,
+  clave      text not null
+);
+alter table public.mensajes_claves enable row level security;
+
+create or replace function public.enviar_mensaje(p jsonb, p_clave text)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_sala text := p->>'sala';
+begin
+  if v_sala <> 'general' and not exists (select 1 from planes where id = v_sala) then
+    raise exception 'sala inexistente';
+  end if;
+  if coalesce(p->>'texto', '') = '' and coalesce(p->>'imagen', '') = '' then
+    raise exception 'mensaje vacío';
+  end if;
+  insert into mensajes (id, sala, autor, texto, responde, imagen)
+  values ((p->>'id')::uuid, v_sala, p->>'autor', coalesce(p->>'texto', ''), p->'responde', nullif(p->>'imagen', ''));
+  insert into mensajes_claves (mensaje_id, clave) values ((p->>'id')::uuid, p_clave);
+end $$;
+
+create or replace function public.editar_mensaje(p_id uuid, p_clave text, p_texto text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  update mensajes m set texto = p_texto, editado = true
+  where m.id = p_id
+    and exists (select 1 from mensajes_claves k where k.mensaje_id = p_id and k.clave = p_clave)
+    and (p_texto <> '' or m.imagen is not null);
+  get diagnostics n = row_count;
+  return n > 0;
+end $$;
+
+create or replace function public.borrar_mensaje(p_id uuid, p_clave text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  delete from mensajes where id = p_id and exists (select 1 from mensajes_claves k where k.mensaje_id = p_id and k.clave = p_clave);
+  get diagnostics n = row_count;
+  return n > 0;
+end $$;
+
+revoke all on function public.enviar_mensaje(jsonb, text) from public;
+revoke all on function public.editar_mensaje(uuid, text, text) from public;
+revoke all on function public.borrar_mensaje(uuid, text) from public;
+grant execute on function public.enviar_mensaje(jsonb, text) to anon, authenticated;
+grant execute on function public.editar_mensaje(uuid, text, text) to anon, authenticated;
+grant execute on function public.borrar_mensaje(uuid, text) to anon, authenticated;
+
+-- Fotos del chat: carpeta pública "fotos" (máx. 5 MB, solo imágenes). Cualquiera con la app puede subir.
+do $$
+begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('fotos', 'fotos', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+    on conflict (id) do nothing;
+    execute 'drop policy if exists "subir fotos" on storage.objects';
+    execute $p$create policy "subir fotos" on storage.objects for insert to anon, authenticated with check (bucket_id = 'fotos')$p$;
+  end if;
+end $$;

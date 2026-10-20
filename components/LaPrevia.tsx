@@ -37,6 +37,9 @@ import {
   Minus,
   Plus,
   Radio,
+  Camera,
+  ImagePlus,
+  Pencil,
   Reply,
   Search,
   Send,
@@ -100,6 +103,8 @@ interface Mensaje {
   autor: string;
   texto: string;
   responde?: Respuesta;
+  imagen?: string; // URL pública (nube) o data URL (modo local)
+  editado?: boolean;
   hora: string;
 }
 
@@ -1954,15 +1959,58 @@ function Buscador({
 
 /* ─────────────────────────── Burbujas de chat ─────────────────────────── */
 
-const citar = (m: Mensaje): Respuesta => ({ autor: m.autor, texto: m.texto.length > 140 ? `${m.texto.slice(0, 140)}…` : m.texto });
+const citar = (m: Mensaje): Respuesta => {
+  const t = m.texto || (m.imagen ? "📷 Foto" : "");
+  return { autor: m.autor, texto: t.length > 140 ? `${t.slice(0, 140)}…` : t };
+};
 
-/** Mensaje de chat: se desliza a la derecha para responderlo. */
-function BurbujaChat({ m, mio, onResponder }: { m: Mensaje; mio: boolean; onResponder: (m: Mensaje) => void }) {
+/** Achica la foto antes de mandarla (lado mayor `max` px, JPEG) para que suba rápido con datos móviles. */
+async function comprimirImagen(archivo: File, max: number, calidad: number): Promise<Blob> {
+  const img = await new Promise<HTMLImageElement>((ok, mal) => {
+    const i = new Image();
+    i.onload = () => ok(i);
+    i.onerror = mal;
+    i.src = URL.createObjectURL(archivo);
+  });
+  const f = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.naturalWidth * f);
+  c.height = Math.round(img.naturalHeight * f);
+  c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(img.src);
+  return new Promise((ok, mal) => c.toBlob((bl) => (bl ? ok(bl) : mal(new Error("sin imagen"))), "image/jpeg", calidad));
+}
+
+export interface AccionesChat {
+  enviar: (texto: string, responde?: Respuesta, imagen?: string) => void;
+  editar: (m: Mensaje, texto: string) => void;
+  borrar: (m: Mensaje) => void;
+  puedeEditar: (m: Mensaje) => boolean;
+  subirFoto: (archivo: File) => Promise<string | null>;
+}
+
+/** Mensaje de chat: se desliza a la derecha para responderlo; los propios se tocan para editar o borrar. */
+function BurbujaChat({
+  m,
+  mio,
+  editable,
+  onResponder,
+  onEditar,
+  onBorrar,
+}: {
+  m: Mensaje;
+  mio: boolean;
+  editable: boolean;
+  onResponder: (m: Mensaje) => void;
+  onEditar: (m: Mensaje) => void;
+  onBorrar: (m: Mensaje) => void;
+}) {
   const x = useMotionValue(0);
   const opacidad = useTransform(x, [0, 60], [0, 1]);
   const escala = useTransform(x, [0, 60], [0.5, 1]);
+  const [menu, setMenu] = useState<"no" | "si" | "borrar">("no");
   return (
-    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className={`relative flex ${mio ? "justify-end" : "justify-start"}`}>
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className={`relative flex flex-col ${mio ? "items-end" : "items-start"}`}>
       <motion.span style={{ opacity: opacidad, scale: escala }} className="pointer-events-none absolute left-1 top-1/2 -mt-4 grid h-8 w-8 place-items-center rounded-full bg-neon/20 text-neon">
         <Reply className="h-4 w-4" />
       </motion.span>
@@ -1973,8 +2021,9 @@ function BurbujaChat({ m, mio, onResponder }: { m: Mensaje; mio: boolean; onResp
         dragSnapToOrigin
         style={{ x }}
         onDragEnd={(_, info) => info.offset.x > 55 && onResponder(m)}
+        onTap={() => editable && setMenu((v) => (v === "no" ? "si" : "no"))}
         onDoubleClick={() => onResponder(m)}
-        title="Desliza a la derecha (o doble clic) para responder"
+        title={editable ? "Toca para editar o borrar · desliza a la derecha para responder" : "Desliza a la derecha (o doble clic) para responder"}
         className={`max-w-[80%] cursor-grab rounded-2xl px-3 py-2 text-sm active:cursor-grabbing ${mio ? "rounded-br-md bg-neon text-noche" : "rounded-bl-md bg-white/[.08]"}`}
       >
         {!mio && <p className="text-[11px] font-extrabold text-oro">{m.autor}</p>}
@@ -1984,25 +2033,187 @@ function BurbujaChat({ m, mio, onResponder }: { m: Mensaje; mio: boolean; onResp
             <p className={`line-clamp-2 ${mio ? "text-noche/70" : "text-white/60"}`}>{m.responde.texto}</p>
           </div>
         )}
-        <p className="whitespace-pre-wrap break-words font-medium">{m.texto}</p>
-        <p className={`mt-0.5 text-right text-[10px] ${mio ? "text-noche/60" : "text-white/40"}`}>{fmtHora(m.hora)}</p>
+        {m.imagen && (
+          <a href={m.imagen} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="-mx-1 mb-1 block overflow-hidden rounded-xl">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={m.imagen} alt={`Foto de ${m.autor}`} className="max-h-64 w-full object-cover" draggable={false} loading="lazy" />
+          </a>
+        )}
+        {m.texto && <p className="whitespace-pre-wrap break-words font-medium">{m.texto}</p>}
+        <p className={`mt-0.5 text-right text-[10px] ${mio ? "text-noche/60" : "text-white/40"}`}>
+          {m.editado && "editado · "}
+          {fmtHora(m.hora)}
+        </p>
       </motion.div>
+      <AnimatePresence>
+        {menu !== "no" && (
+          <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-1 flex items-center gap-1 text-xs font-bold">
+            {menu === "si" ? (
+              <>
+                <button onClick={() => (setMenu("no"), onEditar(m))} className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1 hover:bg-white/15">
+                  <Pencil className="h-3 w-3" /> Editar
+                </button>
+                <button onClick={() => setMenu("borrar")} className="inline-flex items-center gap-1 rounded-full bg-vivo/15 px-2.5 py-1 text-vivo hover:bg-vivo/25">
+                  <Trash2 className="h-3 w-3" /> Borrar
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-white/60">¿Borrar mensaje?</span>
+                <button onClick={() => setMenu("no")} className="rounded-full bg-white/10 px-2.5 py-1">
+                  No
+                </button>
+                <button onClick={() => (setMenu("no"), onBorrar(m))} className="rounded-full bg-vivo px-2.5 py-1 text-white">
+                  Sí, borrar
+                </button>
+              </>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
 
-function BarraRespuesta({ r, onCancelar }: { r: Respuesta; onCancelar: () => void }) {
+function BarraEntrada({ icono, titulo, texto, imagen, onCancelar }: { icono: React.ReactNode; titulo: string; texto?: string; imagen?: string; onCancelar: () => void }) {
   return (
     <div className="flex items-center gap-2 border-t border-white/10 bg-white/[.04] px-3 py-2">
-      <Reply className="h-4 w-4 shrink-0 text-neon" />
+      <span className="shrink-0 text-neon">{icono}</span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {imagen && <img src={imagen} alt="Foto lista para enviar" className="h-10 w-10 shrink-0 rounded-lg object-cover" />}
       <div className="min-w-0 flex-1 border-l-[3px] border-neon pl-2 text-xs">
-        <p className="font-extrabold text-neon">Respondiendo a {r.autor}</p>
-        <p className="truncate text-white/60">{r.texto}</p>
+        <p className="font-extrabold text-neon">{titulo}</p>
+        {texto && <p className="truncate text-white/60">{texto}</p>}
       </div>
-      <button onClick={onCancelar} className="rounded-full p-1.5 text-white/60 hover:bg-white/10" aria-label="Cancelar respuesta">
+      <button type="button" onClick={onCancelar} className="rounded-full p-1.5 text-white/60 hover:bg-white/10" aria-label={`Cancelar: ${titulo}`}>
         <X className="h-4 w-4" />
       </button>
     </div>
+  );
+}
+
+/** Lista de mensajes + caja para escribir: responder, editar, borrar y mandar fotos (cámara o galería). */
+function PanelChat({
+  mensajes,
+  yo,
+  acciones,
+  vacio,
+  placeholder,
+  idCampo,
+  claseLista,
+  claseForm,
+}: {
+  mensajes: Mensaje[];
+  yo: string;
+  acciones: AccionesChat;
+  vacio: string;
+  placeholder: string;
+  idCampo?: string;
+  claseLista: string;
+  claseForm: string;
+}) {
+  const [texto, setTexto] = useState("");
+  const [respondiendo, setRespondiendo] = useState<Respuesta | null>(null);
+  const [editando, setEditando] = useState<Mensaje | null>(null);
+  const [foto, setFoto] = useState<{ url: string | null; subiendo: boolean } | null>(null);
+  const campo = useRef<HTMLInputElement>(null);
+  const camara = useRef<HTMLInputElement>(null);
+  const galeria = useRef<HTMLInputElement>(null);
+  const fin = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    fin.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [mensajes.length]);
+
+  const elegirFoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const archivo = e.target.files?.[0];
+    e.target.value = "";
+    if (!archivo) return;
+    setEditando(null);
+    setFoto({ url: null, subiendo: true });
+    const url = await acciones.subirFoto(archivo);
+    setFoto(url ? { url, subiendo: false } : null);
+    campo.current?.focus();
+  };
+
+  const enviar = (e: React.FormEvent) => {
+    e.preventDefault();
+    const t = texto.trim();
+    if (editando) {
+      if (t || editando.imagen) acciones.editar(editando, t);
+      setEditando(null);
+      setTexto("");
+      return;
+    }
+    if (foto?.subiendo || (!t && !foto?.url)) return;
+    acciones.enviar(t, respondiendo ?? undefined, foto?.url ?? undefined);
+    setTexto("");
+    setRespondiendo(null);
+    setFoto(null);
+  };
+
+  const listo = editando ? !!texto.trim() || !!editando.imagen : !foto?.subiendo && (!!texto.trim() || !!foto?.url);
+
+  return (
+    <>
+      <div className={claseLista}>
+        {mensajes.length === 0 && <p className="py-6 text-center text-xs text-white/40">{vacio}</p>}
+        {mensajes.map((m) => (
+          <BurbujaChat
+            key={m.id}
+            m={m}
+            mio={m.autor === yo}
+            editable={acciones.puedeEditar(m)}
+            onResponder={(x) => {
+              setEditando(null);
+              setRespondiendo(citar(x));
+              campo.current?.focus();
+            }}
+            onEditar={(x) => {
+              setRespondiendo(null);
+              setFoto(null);
+              setEditando(x);
+              setTexto(x.texto);
+              campo.current?.focus();
+            }}
+            onBorrar={acciones.borrar}
+          />
+        ))}
+        <div ref={fin} />
+      </div>
+      {editando && (
+        <BarraEntrada
+          icono={<Pencil className="h-4 w-4" />}
+          titulo="Editando tu mensaje"
+          texto={editando.texto}
+          onCancelar={() => {
+            setEditando(null);
+            setTexto("");
+          }}
+        />
+      )}
+      {!editando && respondiendo && <BarraEntrada icono={<Reply className="h-4 w-4" />} titulo={`Respondiendo a ${respondiendo.autor}`} texto={respondiendo.texto} onCancelar={() => setRespondiendo(null)} />}
+      {!editando && foto && (
+        <BarraEntrada icono={<Camera className="h-4 w-4" />} titulo={foto.subiendo ? "Subiendo foto…" : "Foto lista: agrega un texto si quieres"} imagen={foto.url ?? undefined} onCancelar={() => setFoto(null)} />
+      )}
+      <form onSubmit={enviar} className={`flex items-center gap-1.5 border-t border-white/10 ${claseForm}`}>
+        {!editando && (
+          <>
+            <input ref={camara} type="file" accept="image/*" capture="environment" className="hidden" onChange={elegirFoto} />
+            <input ref={galeria} type="file" accept="image/*" className="hidden" onChange={elegirFoto} />
+            <button type="button" onClick={() => camara.current?.click()} className="grid h-10 w-9 shrink-0 place-items-center rounded-xl text-white/70 hover:bg-white/10 hover:text-white" aria-label="Tomar foto con la cámara" title="Cámara">
+              <Camera className="h-5 w-5" />
+            </button>
+            <button type="button" onClick={() => galeria.current?.click()} className="grid h-10 w-9 shrink-0 place-items-center rounded-xl text-white/70 hover:bg-white/10 hover:text-white" aria-label="Elegir foto de la galería" title="Galería">
+              <ImagePlus className="h-5 w-5" />
+            </button>
+          </>
+        )}
+        <input ref={campo} id={idCampo} value={texto} onChange={(e) => setTexto(e.target.value)} maxLength={500} placeholder={editando ? "Corrige tu mensaje…" : placeholder} className={`${claseInput} min-w-0 py-2`} aria-label={placeholder} />
+        <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-neon text-noche transition active:scale-90 disabled:opacity-40" disabled={!listo} aria-label={editando ? "Guardar cambios" : "Enviar"}>
+          {editando ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+        </button>
+      </form>
+    </>
   );
 }
 
@@ -2216,7 +2427,7 @@ function DetallePlan({
   permisoAvisos,
   onPedirNombre,
   onVoy,
-  onMensaje,
+  accionesChat,
   onRecordatorios,
   onCompartir,
   onPedirPermiso,
@@ -2230,40 +2441,21 @@ function DetallePlan({
   permisoAvisos: NotificationPermission | "no-soportado";
   onPedirNombre: (luego: (nombre: string) => void) => void;
   onVoy: (pl: Plan, nombre: string) => void;
-  onMensaje: (pl: Plan, nombre: string, texto: string, responde?: Respuesta) => void;
+  accionesChat: AccionesChat;
   onRecordatorios: (pl: Plan, r: Plan["recordatorios"]) => void;
   onCompartir: (pl: Plan) => void;
   onPedirPermiso: () => void;
   onBorrar: (pl: Plan) => void;
   onCerrar: () => void;
 }) {
-  const [texto, setTexto] = useState("");
   const [confirmarBorrar, setConfirmarBorrar] = useState(false);
-  const [respondiendo, setRespondiendo] = useState<Respuesta | null>(null);
-  const campo = useRef<HTMLInputElement>(null);
-  const fin = useRef<HTMLDivElement>(null);
   const voy = !!yo && plan.confirmados.includes(yo);
   const inicio = partido?.inicio ?? plan.snap.inicio;
   const titulo = `${partido?.local.nombre ?? plan.snap.local} vs ${partido?.visita.nombre ?? plan.snap.visita}`;
   const direccion = `${plan.lugar}, ${plan.ciudad}, ${plan.estado}, ${plan.pais}`;
   const detalles = `Plan ${plan.hashtag} con ${plan.confirmados.join(", ")}. Organiza: ${plan.anfitrion}.`;
 
-  useEffect(() => {
-    fin.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [plan.chat.length]);
-
   const alternarVoy = () => onPedirNombre((nombre) => onVoy(plan, nombre));
-
-  const enviar = (e: React.FormEvent) => {
-    e.preventDefault();
-    const t = texto.trim();
-    if (!t) return;
-    onPedirNombre((nombre) => {
-      onMensaje(plan, nombre, t, respondiendo ?? undefined);
-      setTexto("");
-      setRespondiendo(null);
-    });
-  };
 
   return (
     <Hoja titulo={plan.hashtag} onCerrar={onCerrar}>
@@ -2405,28 +2597,15 @@ function DetallePlan({
           <p className="flex items-center gap-2 border-b border-white/10 px-4 py-3 text-sm font-bold">
             <MessageCircle className="h-4 w-4 text-neon" /> Chat rápido
           </p>
-          <div className="max-h-60 space-y-2 overflow-y-auto p-3">
-            {plan.chat.length === 0 && <p className="py-4 text-center text-xs text-white/40">Sin mensajes. ¡Rompe el hielo!</p>}
-            {plan.chat.map((m) => (
-              <BurbujaChat
-                key={m.id}
-                m={m}
-                mio={m.autor === yo}
-                onResponder={(x) => {
-                  setRespondiendo(citar(x));
-                  campo.current?.focus();
-                }}
-              />
-            ))}
-            <div ref={fin} />
-          </div>
-          {respondiendo && <BarraRespuesta r={respondiendo} onCancelar={() => setRespondiendo(null)} />}
-          <form onSubmit={enviar} className="flex gap-2 border-t border-white/10 p-2">
-            <input ref={campo} value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Escribe al grupo…" className={`${claseInput} py-2`} aria-label="Mensaje" />
-            <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-neon text-noche transition active:scale-90 disabled:opacity-40" disabled={!texto.trim()} aria-label="Enviar">
-              <Send className="h-4 w-4" />
-            </button>
-          </form>
+          <PanelChat
+            mensajes={plan.chat}
+            yo={yo}
+            acciones={accionesChat}
+            vacio="Sin mensajes. ¡Rompe el hielo!"
+            placeholder="Escribe al grupo…"
+            claseLista="max-h-72 space-y-2 overflow-y-auto p-3"
+            claseForm="p-2"
+          />
         </div>
         {/* Borrar */}
         <div className="rounded-2xl border border-vivo/30 bg-vivo/[.06] p-3">
@@ -2622,6 +2801,8 @@ interface FilaMensaje {
   texto: string;
   hora: string;
   responde?: Respuesta | null;
+  imagen?: string | null;
+  editado?: boolean;
 }
 
 type Recordatorios = Record<string, Plan["recordatorios"]>;
@@ -2649,7 +2830,15 @@ async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[];
   const mensajes = ((me.data ?? []) as FilaMensaje[]).reverse();
   const aMensaje = (m: FilaMensaje): Mensaje => {
     const r = m.responde ?? leerCitaEnTexto(m.texto);
-    return { id: m.id, autor: m.autor, texto: r && !m.responde ? quitarCitaDeTexto(m.texto) : m.texto, hora: m.hora, ...(r ? { responde: r } : {}) };
+    return {
+      id: m.id,
+      autor: m.autor,
+      texto: r && !m.responde ? quitarCitaDeTexto(m.texto) : m.texto,
+      hora: m.hora,
+      ...(r ? { responde: r } : {}),
+      ...(m.imagen ? { imagen: m.imagen } : {}),
+      ...(m.editado ? { editado: true } : {}),
+    };
   };
   const planes = ((pl.data ?? []) as FilaPlan[]).map((f) => ({
     id: f.id,
@@ -2674,32 +2863,7 @@ async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[];
 
 /* ─────────────────────────── Chat en vivo ─────────────────────────── */
 
-function ChatEnVivo({
-  mensajes,
-  yo,
-  enLinea,
-  onEnviar,
-}: {
-  mensajes: Mensaje[];
-  yo: string;
-  enLinea: string[];
-  onEnviar: (texto: string, responde?: Respuesta) => void;
-}) {
-  const [texto, setTexto] = useState("");
-  const [respondiendo, setRespondiendo] = useState<Respuesta | null>(null);
-  const campo = useRef<HTMLInputElement>(null);
-  const fin = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    fin.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [mensajes.length]);
-  const enviar = (e: React.FormEvent) => {
-    e.preventDefault();
-    const t = texto.trim();
-    if (!t) return;
-    onEnviar(t, respondiendo ?? undefined);
-    setTexto("");
-    setRespondiendo(null);
-  };
+function ChatEnVivo({ mensajes, yo, enLinea, acciones }: { mensajes: Mensaje[]; yo: string; enLinea: string[]; acciones: AccionesChat }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-white/10 px-4 pb-3 pt-4">
@@ -2716,28 +2880,16 @@ function ChatEnVivo({
         </div>
         {NUBE && enLinea.length > 0 && <p className="mt-2 truncate text-xs text-white/45">Conectados: {enLinea.join(", ")}</p>}
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3">
-        {mensajes.length === 0 && <p className="py-10 text-center text-sm text-white/45">Nadie ha escrito todavía. Di dónde vas a ver el partido.</p>}
-        {mensajes.map((m) => (
-          <BurbujaChat
-            key={m.id}
-            m={m}
-            mio={m.autor === yo}
-            onResponder={(x) => {
-              setRespondiendo(citar(x));
-              campo.current?.focus();
-            }}
-          />
-        ))}
-        <div ref={fin} />
-      </div>
-      {respondiendo && <BarraRespuesta r={respondiendo} onCancelar={() => setRespondiendo(null)} />}
-      <form onSubmit={enviar} className="flex gap-2 border-t border-white/10 p-3 pb-24 lg:pb-3">
-        <input ref={campo} id="chat-general" value={texto} onChange={(e) => setTexto(e.target.value)} maxLength={500} placeholder="Escribe a todos…" className={`${claseInput} py-2`} aria-label="Mensaje al chat en vivo" />
-        <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-neon text-noche transition active:scale-90 disabled:opacity-40" disabled={!texto.trim()} aria-label="Enviar al chat en vivo">
-          <Send className="h-4 w-4" />
-        </button>
-      </form>
+      <PanelChat
+        mensajes={mensajes}
+        yo={yo}
+        acciones={acciones}
+        vacio="Nadie ha escrito todavía. Di dónde vas a ver el partido."
+        placeholder="Escribe a todos…"
+        idCampo="chat-general"
+        claseLista="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-3"
+        claseForm="p-3 pb-24 lg:pb-3"
+      />
     </div>
   );
 }
@@ -3055,6 +3207,7 @@ export default function LaPrevia() {
   const recordatoriosRef = useRef<Recordatorios>({});
   const canal = useRef<RealtimeChannel | null>(null);
   const sinNube = useRef(false);
+  const clavesMsg = useRef<Record<string, string>>({});
 
   const avisar = useCallback((a: Omit<Aviso, "id">) => {
     const id = uid();
@@ -3076,6 +3229,7 @@ export default function LaPrevia() {
     // Solo los planes que alguien agregó de verdad (se descartan los de muestra de versiones anteriores).
     let iniciales = NUBE ? [] : leer<Plan[]>("previa:planes", []).filter((p) => !p.id.startsWith("demo-"));
     recordatoriosRef.current = leer<Recordatorios>("previa:recordatorios", {});
+    clavesMsg.current = leer<Record<string, string>>("previa:clavesMsg", {});
     setEventos(leer<EventoPersonal[]>("previa:eventos", []));
     setVistos(leer<Record<string, string>>("previa:vistos", {}));
     let invs = leer<string[]>("previa:invitaciones", []);
@@ -3379,11 +3533,25 @@ export default function LaPrevia() {
     if (error && error.code !== "23505") fallo();
   };
 
-  const mandarMensaje = async (sala: string, autor: string, texto: string, responde?: Respuesta) => {
-    const m: Mensaje = { id: uid(), autor, texto, hora: new Date().toISOString(), ...(responde ? { responde } : {}) };
-    if (sala === SALA_GENERAL) setGeneral((xs) => [...xs, m]);
-    else cambiarPlan(sala, (x) => ({ ...x, chat: [...x.chat, m] }));
+  const cambiarSala = (sala: string, f: (xs: Mensaje[]) => Mensaje[]) => {
+    if (sala === SALA_GENERAL) setGeneral(f);
+    else cambiarPlan(sala, (x) => ({ ...x, chat: f(x.chat) }));
+  };
+  const nuevoId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${uid()}${uid()}`);
+
+  const mandarMensaje = async (sala: string, autor: string, texto: string, responde?: Respuesta, imagen?: string) => {
+    const m: Mensaje = { id: nuevoId(), autor, texto, hora: new Date().toISOString(), ...(responde ? { responde } : {}), ...(imagen ? { imagen } : {}) };
+    cambiarSala(sala, (xs) => [...xs, m]);
     if (!NUBE) return;
+    // Con schema.sql al día, el mensaje se guarda con su llave para poder editarlo o borrarlo después.
+    const clave = uid() + uid();
+    const r = await NUBE.rpc("enviar_mensaje", { p: { id: m.id, sala, autor, texto, responde: responde ?? null, imagen: imagen ?? null }, p_clave: clave });
+    if (!r.error) {
+      clavesMsg.current = { ...clavesMsg.current, [m.id]: clave };
+      guardar("previa:clavesMsg", clavesMsg.current);
+      return;
+    }
+    if (!/enviar_mensaje|function/i.test(r.error.message)) return fallo(`Tu mensaje no se envió: ${r.error.message}`);
     let { error } = await NUBE.from("mensajes").insert({ sala, autor, texto, ...(responde ? { responde } : {}) });
     // Si la base aún no tiene la columna `responde` (schema.sql viejo), la cita va dentro del texto.
     if (error && responde && /responde/.test(error.message)) {
@@ -3392,6 +3560,57 @@ export default function LaPrevia() {
     }
     if (error) fallo(`Tu mensaje no se envió: ${error.message}`);
   };
+
+  const editarMensaje = async (sala: string, m: Mensaje, texto: string) => {
+    cambiarSala(sala, (xs) => xs.map((x) => (x.id === m.id ? { ...x, texto, editado: true } : x)));
+    if (!NUBE) return;
+    const { data, error } = await NUBE.rpc("editar_mensaje", { p_id: m.id, p_clave: clavesMsg.current[m.id] ?? "", p_texto: texto });
+    if (error || !data) fallo("No se pudo editar el mensaje.");
+  };
+
+  const borrarMensaje = async (sala: string, m: Mensaje) => {
+    cambiarSala(sala, (xs) => xs.filter((x) => x.id !== m.id));
+    if (!NUBE) return;
+    const { data, error } = await NUBE.rpc("borrar_mensaje", { p_id: m.id, p_clave: clavesMsg.current[m.id] ?? "" });
+    if (error || !data) fallo("No se pudo borrar el mensaje.");
+  };
+
+  const subirFoto = async (sala: string, archivo: File): Promise<string | null> => {
+    try {
+      if (!NUBE) {
+        // Modo local: la foto se guarda dentro del mensaje, más chica para no llenar el navegador.
+        const bl = await comprimirImagen(archivo, 900, 0.7);
+        return await new Promise<string>((ok) => {
+          const fr = new FileReader();
+          fr.onload = () => ok(String(fr.result));
+          fr.readAsDataURL(bl);
+        });
+      }
+      const bl = await comprimirImagen(archivo, 1600, 0.82);
+      const ruta = `${sala}/${nuevoId()}.jpg`;
+      const { error } = await NUBE.storage.from("fotos").upload(ruta, bl, { contentType: "image/jpeg" });
+      if (error) {
+        avisar({
+          titulo: "No se pudo subir la foto",
+          texto: /bucket|not found/i.test(error.message) ? "Falta correr supabase/schema.sql en Supabase." : error.message,
+          tono: "vivo",
+        });
+        return null;
+      }
+      return NUBE.storage.from("fotos").getPublicUrl(ruta).data.publicUrl;
+    } catch {
+      avisar({ titulo: "No se pudo leer la foto", texto: "Prueba con otra imagen.", tono: "vivo" });
+      return null;
+    }
+  };
+
+  const accionesPara = (sala: string, conNombreAntes: (luego: (n: string) => void) => void): AccionesChat => ({
+    enviar: (t, r, img) => conNombreAntes((n) => mandarMensaje(sala, n, t, r, img)),
+    editar: (m, t) => editarMensaje(sala, m, t),
+    borrar: (m) => borrarMensaje(sala, m),
+    puedeEditar: (m) => !!yo && m.autor === yo && (!NUBE || !!clavesMsg.current[m.id]),
+    subirFoto: (f) => subirFoto(sala, f),
+  });
 
   const cambiarRecordatorios = (pl: Plan, r: Plan["recordatorios"]) => {
     cambiarPlan(pl.id, (x) => ({ ...x, recordatorios: r }));
@@ -3429,7 +3648,7 @@ export default function LaPrevia() {
     vista === "stats" ? (
       <Stats tabla={tabla} onPartidos={() => setVista("partidos")} />
     ) : vista === "chat" ? (
-      <ChatEnVivo mensajes={general} yo={yo} enLinea={enLinea} onEnviar={(t, r) => conNombre((n) => mandarMensaje(SALA_GENERAL, n, t, r))} />
+      <ChatEnVivo mensajes={general} yo={yo} enLinea={enLinea} acciones={accionesPara(SALA_GENERAL, conNombre)} />
     ) : vista === "planes" ? (
       <ListaPlanes planes={planes} partidosPorId={partidosPorId} ahora={ahora} yo={yo} onAbrir={(pl) => (abrirPlan(pl), window.innerWidth < 1024 && setVista("mapa"))} onNuevo={() => empezarPin()} />
     ) : (
@@ -3691,7 +3910,7 @@ export default function LaPrevia() {
             permisoAvisos={permiso}
             onPedirNombre={conNombre}
             onVoy={alternarVoy}
-            onMensaje={(pl, n, t, r) => mandarMensaje(pl.id, n, t, r)}
+            accionesChat={accionesPara(planAbierto.id, conNombre)}
             onRecordatorios={cambiarRecordatorios}
             onCompartir={compartirPlan}
             onBorrar={borrarPlan}
