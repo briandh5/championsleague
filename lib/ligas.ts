@@ -1,14 +1,28 @@
 /**
- * Juegos del día de MLB y NBA (cinta de abajo), leídos del marcador público de ESPN (sin llave).
- * Lo usan la ruta /api/ligas y, si esa ruta no responde, la app directamente.
+ * Juegos del día de MLB, NBA y Liga MX (cinta de abajo), leídos del marcador público de ESPN (sin llave).
+ * Lo usan las rutas /api/ligas y /api/ligas/noticias y, si no responden, la app directamente.
  */
-export type Liga = "mlb" | "nba";
+export type Liga = "mlb" | "nba" | "ligamx";
+export const LIGAS: Liga[] = ["ligamx", "mlb", "nba"];
 
 export interface LadoJuego {
   nombre: string;
   abrev: string;
   logo?: string;
   marcador?: number;
+}
+
+export interface GolLiga {
+  min: string;
+  jugador: string;
+  lado: "L" | "V";
+  tipo?: "penal" | "propia";
+}
+
+export interface NoticiaLiga {
+  titulo: string;
+  url: string;
+  fecha?: string;
 }
 
 export interface JuegoLiga {
@@ -23,16 +37,20 @@ export interface JuegoLiga {
   sede?: string;
   local: LadoJuego;
   visita: LadoJuego;
+  /** Solo fútbol: quién anotó y en qué minuto. */
+  goles?: GolLiga[];
+  /** Página del partido en ESPN. */
+  enlace?: string;
 }
 
-export const NOMBRE_LIGA: Record<Liga, string> = { mlb: "MLB", nba: "NBA" };
+export const NOMBRE_LIGA: Record<Liga, string> = { mlb: "MLB", nba: "NBA", ligamx: "Liga MX" };
 
-const RUTAS: Record<Liga, string> = { mlb: "baseball/mlb", nba: "basketball/nba" };
+const RUTAS: Record<Liga, string> = { mlb: "baseball/mlb", nba: "basketball/nba", ligamx: "soccer/mex.1" };
 
 interface Competidor {
   homeAway: "home" | "away";
   score?: string;
-  team: { displayName: string; shortDisplayName?: string; abbreviation?: string; logo?: string };
+  team: { id?: string; displayName: string; shortDisplayName?: string; abbreviation?: string; logo?: string };
 }
 interface EventoESPN {
   id: string;
@@ -42,14 +60,27 @@ interface EventoESPN {
     status: { type: { state: "pre" | "in" | "post"; shortDetail?: string } };
     notes?: { headline?: string }[];
     venue?: { fullName?: string };
+    details?: {
+      scoringPlay?: boolean;
+      penaltyKick?: boolean;
+      ownGoal?: boolean;
+      clock?: { displayValue?: string };
+      team?: { id?: string };
+      athletesInvolved?: { displayName?: string }[];
+    }[];
   }[];
+  links?: { href?: string; rel?: string[] }[];
 }
 
 /** Día local como AAAAMMDD. */
 export const fechaLocal = (d = new Date()) =>
   `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 
-export const urlESPN = (liga: Liga, fecha: string) => `https://site.api.espn.com/apis/site/v2/sports/${RUTAS[liga]}/scoreboard?dates=${fecha}`;
+export const urlESPN = (liga: Liga, fecha: string) =>
+  `https://site.api.espn.com/apis/site/v2/sports/${RUTAS[liga]}/scoreboard?dates=${fecha}${liga === "ligamx" ? "&lang=es&region=mx" : ""}`;
+
+export const urlResumenESPN = (liga: Liga, id: string) =>
+  `https://site.api.espn.com/apis/site/v2/sports/${RUTAS[liga]}/summary?event=${id.replace(/^[a-z]+-/, "")}${liga === "ligamx" ? "&lang=es&region=mx" : ""}`;
 
 export function leerJuegosESPN(liga: Liga, j: { events?: EventoESPN[] }): JuegoLiga[] {
   return (j.events ?? []).flatMap((e) => {
@@ -75,7 +106,35 @@ export function leerJuegosESPN(liga: Liga, j: { events?: EventoESPN[] }): JuegoL
         sede: c.venue?.fullName,
         local: lado(casa),
         visita: lado(fuera),
+        goles: c.details
+          ?.filter((d) => d.scoringPlay)
+          .map((d) => ({
+            min: d.clock?.displayValue ?? "",
+            jugador: d.athletesInvolved?.[0]?.displayName ?? "Gol",
+            lado: d.team?.id && d.team.id === fuera.team.id ? ("V" as const) : ("L" as const),
+            ...(d.penaltyKick ? { tipo: "penal" as const } : d.ownGoal ? { tipo: "propia" as const } : {}),
+          })),
+        enlace: e.links?.find((l) => l.rel?.includes("summary") || l.rel?.includes("desktop"))?.href ?? e.links?.[0]?.href,
       },
     ];
   });
 }
+
+const sinAcentos = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+/** Noticias de ESPN del resumen del partido que mencionan a alguno de los dos equipos (máximo 4). */
+export function leerNoticiasESPN(
+  j: { news?: { articles?: { headline?: string; description?: string; published?: string; links?: { web?: { href?: string } } }[] } },
+  equipos: string[],
+): NoticiaLiga[] {
+  const claves = equipos.map(sinAcentos).filter((x) => x.length > 2);
+  return (j.news?.articles ?? [])
+    .filter((a) => a.headline && a.links?.web?.href)
+    .filter((a) => claves.some((k) => sinAcentos(`${a.headline} ${a.description ?? ""}`).includes(k)))
+    .slice(0, 4)
+    .map((a) => ({ titulo: a.headline!, url: a.links!.web!.href!, fecha: a.published }));
+}
+
+/** Búsqueda de noticias del partido en Google Noticias (siempre disponible como respaldo). */
+export const urlBuscarNoticias = (g: JuegoLiga) =>
+  `https://news.google.com/search?q=${encodeURIComponent(`${g.local.nombre} ${g.visita.nombre}`)}&hl=es-419&gl=MX&ceid=MX:es-419`;
