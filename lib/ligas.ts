@@ -1,9 +1,18 @@
 /**
- * Juegos del día de MLB, NBA y Liga MX (cinta de abajo), leídos del marcador público de ESPN (sin llave).
- * Lo usan las rutas /api/ligas y /api/ligas/noticias y, si no responden, la app directamente.
+ * Juegos del día de fútbol (Liga MX, Liga MX Femenil, Leagues Cup, Concacaf Champions Cup), MLB y NBA para la cinta de abajo,
+ * leídos del marcador público de ESPN (sin llave). Lo usan las rutas /api/ligas y /api/ligas/noticias y, si no responden, la app directamente.
  */
-export type Liga = "mlb" | "nba" | "ligamx";
-export const LIGAS: Liga[] = ["ligamx", "mlb", "nba"];
+export type Liga = "ligamx" | "femenil" | "leagues" | "concacaf" | "mlb" | "nba";
+export type Deporte = "futbol" | "beisbol" | "basquet";
+
+export const DEPORTES: { clave: Deporte; nombre: string; icono: string; ligas: Liga[] }[] = [
+  { clave: "futbol", nombre: "Fútbol", icono: "⚽", ligas: ["ligamx", "femenil", "leagues", "concacaf"] },
+  { clave: "beisbol", nombre: "Béisbol", icono: "⚾", ligas: ["mlb"] },
+  { clave: "basquet", nombre: "Básquetbol", icono: "🏀", ligas: ["nba"] },
+];
+export const LIGAS: Liga[] = DEPORTES.flatMap((d) => d.ligas);
+export const deporteDe = (l: Liga): Deporte => DEPORTES.find((d) => d.ligas.includes(l))!.clave;
+export const esFutbol = (l: Liga) => deporteDe(l) === "futbol";
 
 export interface LadoJuego {
   nombre: string;
@@ -43,9 +52,23 @@ export interface JuegoLiga {
   enlace?: string;
 }
 
-export const NOMBRE_LIGA: Record<Liga, string> = { mlb: "MLB", nba: "NBA", ligamx: "Liga MX" };
+export const NOMBRE_LIGA: Record<Liga, string> = {
+  ligamx: "Liga MX",
+  femenil: "Liga MX Femenil",
+  leagues: "Leagues Cup",
+  concacaf: "Concacaf Champions Cup",
+  mlb: "MLB",
+  nba: "NBA",
+};
 
-const RUTAS: Record<Liga, string> = { mlb: "baseball/mlb", nba: "basketball/nba", ligamx: "soccer/mex.1" };
+const RUTAS: Record<Liga, string> = {
+  ligamx: "soccer/mex.1",
+  femenil: "soccer/mex.w.1",
+  leagues: "soccer/concacaf.leagues.cup",
+  concacaf: "soccer/concacaf.champions",
+  mlb: "baseball/mlb",
+  nba: "basketball/nba",
+};
 
 interface Competidor {
   homeAway: "home" | "away";
@@ -77,10 +100,10 @@ export const fechaLocal = (d = new Date()) =>
   `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
 
 export const urlESPN = (liga: Liga, fecha: string) =>
-  `https://site.api.espn.com/apis/site/v2/sports/${RUTAS[liga]}/scoreboard?dates=${fecha}${liga === "ligamx" ? "&lang=es&region=mx" : ""}`;
+  `https://site.api.espn.com/apis/site/v2/sports/${RUTAS[liga]}/scoreboard?dates=${fecha}${esFutbol(liga) ? "&lang=es&region=mx" : ""}`;
 
 export const urlResumenESPN = (liga: Liga, id: string) =>
-  `https://site.api.espn.com/apis/site/v2/sports/${RUTAS[liga]}/summary?event=${id.replace(/^[a-z]+-/, "")}${liga === "ligamx" ? "&lang=es&region=mx" : ""}`;
+  `https://site.api.espn.com/apis/site/v2/sports/${RUTAS[liga]}/summary?event=${id.replace(/^[a-z]+-/, "")}${esFutbol(liga) ? "&lang=es&region=mx" : ""}`;
 
 export function leerJuegosESPN(liga: Liga, j: { events?: EventoESPN[] }): JuegoLiga[] {
   return (j.events ?? []).flatMap((e) => {

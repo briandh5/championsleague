@@ -19,6 +19,10 @@ import {
   urlBuscarNoticias,
   urlESPN,
   urlResumenESPN,
+  deporteDe,
+  DEPORTES,
+  esFutbol,
+  type Deporte,
   type JuegoLiga,
   type Liga,
   type NoticiaLiga,
@@ -3431,11 +3435,11 @@ function FilaEvento({ ev, onBorrar, conFecha }: { ev: EventoPersonal; onBorrar: 
 
 /* ─────────────────────────── App principal ─────────────────────────── */
 
-/* ---------- Cinta de Liga MX, MLB y NBA ---------- */
+/* ---------- Cinta de fútbol, béisbol y básquetbol ---------- */
 
 type JuegosDelDia = Record<Liga, JuegoLiga[] | null>;
 
-/** Juegos de hoy (día local) de Liga MX, MLB y NBA. null en una liga = no se pudo leer; se refresca cada minuto. */
+/** Juegos de hoy (día local) de cada liga de la cinta. null en una liga = no se pudo leer; se refresca cada minuto. */
 function useLigasHoy() {
   const [datos, setDatos] = useState<JuegosDelDia | "cargando">("cargando");
   useEffect(() => {
@@ -3475,34 +3479,39 @@ function useLigasHoy() {
   return datos;
 }
 
-const ICONO_LIGA: Record<Liga, string> = { mlb: "⚾", nba: "🏀", ligamx: "⚽" };
+const ICONO_LIGA: Record<Liga, string> = { ligamx: "⚽", femenil: "⚽", leagues: "⚽", concacaf: "⚽", mlb: "⚾", nba: "🏀" };
+/** Nombre corto para la cinta. */
+const CORTO_LIGA: Record<Liga, string> = { ligamx: "Liga MX", femenil: "Femenil", leagues: "Leagues Cup", concacaf: "Concachampions", mlb: "MLB", nba: "NBA" };
 const horaCorta = (iso: string) => new Date(iso).toLocaleTimeString("es-MX", { hour: "numeric", minute: "2-digit" });
 
 function textoJuego(g: JuegoLiga) {
-  const sep = g.liga === "ligamx" ? " vs " : " @ ";
-  if (g.estado === "programado") return g.liga === "ligamx" ? `${g.local.abrev}${sep}${g.visita.abrev} · ${horaCorta(g.inicio)}` : `${g.visita.abrev}${sep}${g.local.abrev} · ${horaCorta(g.inicio)}`;
+  const futbol = esFutbol(g.liga);
+  const pre = futbol ? `${CORTO_LIGA[g.liga]}: ` : "";
+  if (g.estado === "programado")
+    return futbol ? `${pre}${g.local.abrev} vs ${g.visita.abrev} · ${horaCorta(g.inicio)}` : `${g.visita.abrev} @ ${g.local.abrev} · ${horaCorta(g.inicio)}`;
   const fin = g.estado === "final" ? "Final" : g.detalle;
-  return g.liga === "ligamx"
-    ? `${g.local.abrev} ${g.local.marcador} - ${g.visita.marcador} ${g.visita.abrev} · ${fin}`
+  return futbol
+    ? `${pre}${g.local.abrev} ${g.local.marcador} - ${g.visita.marcador} ${g.visita.abrev} · ${fin}`
     : `${g.visita.abrev} ${g.visita.marcador} - ${g.local.marcador} ${g.local.abrev} · ${fin}`;
 }
 
 function CintaLigas({ datos, onAbrir }: { datos: JuegosDelDia | "cargando"; onAbrir: () => void }) {
   const piezas: { clave: string; icono: string; texto: string; vivo?: boolean }[] = [];
-  if (datos === "cargando") piezas.push({ clave: "c", icono: "⏳", texto: "Buscando los juegos de hoy de Liga MX, MLB y NBA…" });
-  else
-    LIGAS.forEach((liga) => {
-      const js = datos[liga];
-      if (js === null) piezas.push({ clave: liga, icono: ICONO_LIGA[liga], texto: `${NOMBRE_LIGA[liga]}: marcadores no disponibles ahorita` });
-      else if (!js.length) piezas.push({ clave: liga, icono: ICONO_LIGA[liga], texto: `Hoy no hay juegos de ${NOMBRE_LIGA[liga]}` });
-      else js.forEach((g) => piezas.push({ clave: g.id, icono: ICONO_LIGA[liga], texto: textoJuego(g), vivo: g.estado === "vivo" }));
-    });
+  if (datos === "cargando") piezas.push({ clave: "c", icono: "⏳", texto: "Buscando los juegos de hoy de fútbol, béisbol y básquetbol…" });
+  else {
+    LIGAS.forEach((liga) => datos[liga]?.forEach((g) => piezas.push({ clave: g.id, icono: ICONO_LIGA[liga], texto: textoJuego(g), vivo: g.estado === "vivo" })));
+    // Las ligas sin juegos (o sin datos) van juntas en una sola pieza para no llenar la cinta.
+    const sin = LIGAS.filter((l) => datos[l] && !datos[l]!.length).map((l) => CORTO_LIGA[l]);
+    const caidas = LIGAS.filter((l) => datos[l] === null).map((l) => CORTO_LIGA[l]);
+    if (sin.length) piezas.push({ clave: "sin", icono: "💤", texto: `Hoy sin juegos: ${sin.join(", ")}` });
+    if (caidas.length) piezas.push({ clave: "caidas", icono: "📡", texto: `Sin marcadores ahorita: ${caidas.join(", ")}` });
+  }
   // La tira va duplicada para que el desplazamiento no tenga cortes; más texto, más lento.
   const duracion = Math.max(35, piezas.reduce((n, p) => n + p.texto.length, 0) * 0.45);
   return (
     <button
       onClick={onAbrir}
-      aria-label="Ver los juegos de hoy de Liga MX, MLB y NBA"
+      aria-label="Ver los juegos de hoy de fútbol, béisbol y básquetbol"
       className="group flex h-8 w-full items-center overflow-hidden rounded-xl border border-white/10 bg-noche-900/95 text-left shadow-xl backdrop-blur"
     >
       <span className="z-10 flex h-full shrink-0 items-center gap-1 bg-oro px-2.5 font-display text-xs font-extrabold uppercase tracking-wide text-noche">Hoy ⚽⚾🏀</span>
@@ -3554,7 +3563,7 @@ function EstadoJuego({ g }: { g: JuegoLiga }) {
 }
 
 /** En fútbol el local va primero; en MLB y NBA, la visita (como se lee en EE. UU.). */
-const ordenLados = (g: JuegoLiga) => (g.liga === "ligamx" ? [g.local, g.visita] : [g.visita, g.local]);
+const ordenLados = (g: JuegoLiga) => (esFutbol(g.liga) ? [g.local, g.visita] : [g.visita, g.local]);
 
 function DetalleJuego({ g, onVolver }: { g: JuegoLiga; onVolver: () => void }) {
   const [noticias, setNoticias] = useState<NoticiaLiga[] | null | "cargando">("cargando");
@@ -3601,7 +3610,7 @@ function DetalleJuego({ g, onVolver }: { g: JuegoLiga; onVolver: () => void }) {
           <LadoMarcador l={b} gana={gana(b, a)} grande />
         </div>
         {g.sede && <p className="mt-3 text-xs text-white/45">📍 {g.sede}</p>}
-        {g.liga === "ligamx" && g.estado !== "programado" && (
+        {esFutbol(g.liga) && g.estado !== "programado" && (
           g.goles?.length ? (
             <Goleadores goles={g.goles} />
           ) : (
@@ -3643,26 +3652,56 @@ function DetalleJuego({ g, onVolver }: { g: JuegoLiga; onVolver: () => void }) {
 
 function HojaLigas({ datos, onCerrar }: { datos: JuegosDelDia | "cargando"; onCerrar: () => void }) {
   const cuenta = (l: Liga) => (datos === "cargando" ? 0 : (datos[l]?.length ?? 0));
+  const cuentaDeporte = (d: Deporte) => DEPORTES.find((x) => x.clave === d)!.ligas.reduce((n, l) => n + cuenta(l), 0);
+  // Abre en la primera liga con juegos hoy.
   const [liga, setLiga] = useState<Liga>(() => LIGAS.find((l) => cuenta(l)) ?? "ligamx");
+  const deporte = deporteDe(liga);
+  const ligasDeporte = DEPORTES.find((x) => x.clave === deporte)!.ligas;
   const [elegido, setElegido] = useState<string | null>(null);
   const juegos = datos === "cargando" ? undefined : datos[liga];
   const juego = elegido ? juegos?.find((g) => g.id === elegido) : undefined;
   const hoy = new Date().toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" }).replace(/^./, (c) => c.toUpperCase());
+  const irADeporte = (d: Deporte) => {
+    const ls = DEPORTES.find((x) => x.clave === d)!.ligas;
+    setLiga(ls.find((l) => cuenta(l)) ?? ls[0]);
+    setElegido(null);
+  };
   return (
-    <Hoja titulo="Hoy en Liga MX, MLB y NBA" onCerrar={onCerrar}>
+    <Hoja titulo="Hoy en los deportes" onCerrar={onCerrar}>
       <p className="-mt-1 mb-3 text-xs font-semibold text-white/50">{hoy} · marcadores de ESPN</p>
-      <div className="mb-3 flex gap-2">
-        {LIGAS.map((l) => (
+      {/* Categorías */}
+      <div className="mb-2 grid grid-cols-3 gap-2" role="tablist" aria-label="Categorías">
+        {DEPORTES.map((d) => (
           <button
-            key={l}
-            onClick={() => (setLiga(l), setElegido(null))}
-            className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl border-2 py-2 font-display text-sm font-extrabold uppercase tracking-wide ${liga === l ? "border-noche bg-neon text-noche shadow-comic" : "border-white/10 text-white/70"}`}
+            key={d.clave}
+            role="tab"
+            aria-selected={deporte === d.clave}
+            onClick={() => irADeporte(d.clave)}
+            className={`flex flex-col items-center gap-0.5 rounded-xl border-2 py-2 font-display text-[13px] font-extrabold uppercase tracking-wide ${deporte === d.clave ? "border-noche bg-neon text-noche shadow-comic" : "border-white/10 text-white/70"}`}
           >
-            {ICONO_LIGA[l]} <span className="whitespace-nowrap">{NOMBRE_LIGA[l]}</span>
-            <span className={`rounded-full px-1.5 text-[11px] ${liga === l ? "bg-noche/15" : "bg-white/10"}`}>{cuenta(l)}</span>
+            <span className="text-lg leading-none">{d.icono}</span>
+            <span className="flex items-center gap-1">
+              {d.nombre}
+              <span className={`rounded-full px-1.5 text-[10px] ${deporte === d.clave ? "bg-noche/15" : "bg-white/10"}`}>{cuentaDeporte(d.clave)}</span>
+            </span>
           </button>
         ))}
       </div>
+      {/* Ligas de la categoría */}
+      {ligasDeporte.length > 1 && (
+        <div className="-mx-5 mb-3 flex gap-2 overflow-x-auto px-5 pb-1 [scrollbar-width:none]">
+          {ligasDeporte.map((l) => (
+            <button
+              key={l}
+              onClick={() => (setLiga(l), setElegido(null))}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold ${liga === l ? "border-oro bg-oro text-noche" : "border-white/15 text-white/70"}`}
+            >
+              {NOMBRE_LIGA[l]}
+              <span className={`rounded-full px-1.5 text-[10px] ${liga === l ? "bg-noche/15" : "bg-white/10"}`}>{cuenta(l)}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {juego ? (
         <DetalleJuego key={juego.id} g={juego} onVolver={() => setElegido(null)} />
       ) : juegos === undefined ? (
@@ -3689,7 +3728,7 @@ function HojaLigas({ datos, onCerrar }: { datos: JuegosDelDia | "cargando"; onCe
                     <LadoMarcador l={a} gana={terminado && (a.marcador ?? 0) > (b.marcador ?? 0)} />
                     <LadoMarcador l={b} gana={terminado && (b.marcador ?? 0) > (a.marcador ?? 0)} />
                   </div>
-                  {g.liga === "ligamx" && g.goles && g.goles.length > 0 && <Goleadores goles={g.goles} />}
+                  {esFutbol(g.liga) && g.goles && g.goles.length > 0 && <Goleadores goles={g.goles} />}
                   {g.sede && <p className="mt-2 text-[11px] text-white/40">{g.sede}</p>}
                 </button>
               </li>
