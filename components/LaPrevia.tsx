@@ -8,8 +8,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useTransform } from "framer-motion";
-import { geoContains, geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
-import { feature, merge, neighbors } from "topojson-client";
+import { geoCentroid, geoContains, geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
+import { feature, merge, mesh, neighbors } from "topojson-client";
 import {
   fechaLocal,
   LIGAS,
@@ -28,7 +28,7 @@ import {
   type NoticiaLiga,
 } from "@/lib/ligas";
 import type { GeometryCollection, Topology } from "topojson-specification";
-import type { FeatureCollection, Geometry } from "geojson";
+import type { Feature, FeatureCollection, Geometry, MultiLineString } from "geojson";
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import mundoTopo from "world-atlas/countries-110m.json";
 import eeuuTopo from "us-atlas/states-10m.json";
@@ -159,49 +159,49 @@ interface Aviso {
 
 const FASES: Fase[] = ["Fase de liga", "Play-off", "Octavos", "Cuartos", "Semifinal", "Final"];
 
-// Escudos en alta resolución desde el CDN público de API-Football; si alguno falla se dibuja un escudo con los colores del club.
-const esc = (id: number) => `https://media.api-sports.io/football/teams/${id}.png`;
+// Escudos oficiales desde el CDN público de ESPN (el número es el id del club en ESPN); si alguno falla se dibuja un escudo con los colores del club.
+const esc = (id: number) => `https://a.espncdn.com/i/teamlogos/soccer/500/${id}.png`;
 
 type FilaEquipo = [id: string, nombre: string, corto: string, pais: string, escudo: number | null, c1: string, c2: string, estadio: string, ciudad: string];
 
 // Los 36 clubes de la fase de liga 2026/27 según uefa.com.
 const FILAS_EQUIPOS: FilaEquipo[] = [
-  ["ars", "Arsenal", "ARS", "ENG", 42, "#ef0107", "#063672", "Emirates Stadium", "Londres"],
-  ["avl", "Aston Villa", "AVL", "ENG", 66, "#670e36", "#95bfe5", "Villa Park", "Birmingham"],
-  ["liv", "Liverpool", "LIV", "ENG", 40, "#c8102e", "#00b2a9", "Anfield", "Liverpool"],
-  ["mci", "Manchester City", "MCI", "ENG", 50, "#6cabdd", "#1c2c5b", "Etihad Stadium", "Mánchester"],
-  ["mun", "Manchester United", "MUN", "ENG", 33, "#da291c", "#000000", "Old Trafford", "Mánchester"],
-  ["len", "Lens", "RCL", "FRA", 116, "#ffd700", "#e30613", "Stade Bollaert-Delelis", "Lens"],
-  ["lil", "Lille", "LIL", "FRA", 79, "#e01e13", "#0d1e3f", "Stade Pierre-Mauroy", "Lille"],
-  ["psg", "Paris Saint-Germain", "PSG", "FRA", 85, "#004170", "#da291c", "Parc des Princes", "París"],
-  ["bay", "Bayern München", "BAY", "GER", 157, "#dc052d", "#0066b2", "Allianz Arena", "Múnich"],
-  ["bvb", "Borussia Dortmund", "BVB", "GER", 165, "#fde100", "#000000", "Signal Iduna Park", "Dortmund"],
-  ["rbl", "Leipzig", "RBL", "GER", 173, "#dd0741", "#ffffff", "Red Bull Arena", "Leipzig"],
-  ["vfb", "Stuttgart", "VFB", "GER", 172, "#e32219", "#ffffff", "MHPArena", "Stuttgart"],
-  ["int", "Inter", "INT", "ITA", 505, "#0068a8", "#000000", "San Siro", "Milán"],
-  ["nap", "Napoli", "NAP", "ITA", 492, "#12a0d7", "#ffffff", "Diego Armando Maradona", "Nápoles"],
-  ["rom", "Roma", "ROM", "ITA", 497, "#8e1f2f", "#f0bc42", "Stadio Olimpico", "Roma"],
-  ["com", "Como", "COM", "ITA", 895, "#1b3d8f", "#ffffff", "Giuseppe Sinigaglia", "Como"],
-  ["fey", "Feyenoord", "FEY", "NED", 209, "#e30613", "#ffffff", "De Kuip", "Róterdam"],
-  ["psv", "PSV Eindhoven", "PSV", "NED", 197, "#ed1c24", "#ffffff", "Philips Stadion", "Eindhoven"],
-  ["bod", "Bodø/Glimt", "BOD", "NOR", 327, "#ffd200", "#000000", "Aspmyra Stadion", "Bodø"],
-  ["vik", "Viking", "VIK", "NOR", null, "#003b7b", "#ffffff", "Viking Stadion", "Stavanger"],
-  ["por", "Porto", "POR", "POR", 212, "#00428c", "#ffffff", "Estádio do Dragão", "Oporto"],
-  ["scp", "Sporting CP", "SCP", "POR", 228, "#008057", "#ffffff", "José Alvalade", "Lisboa"],
-  ["slo", "Slovan Bratislava", "SLO", "SVK", null, "#0058a3", "#ffffff", "Tehelné pole", "Bratislava"],
-  ["atm", "Atlético de Madrid", "ATM", "ESP", 530, "#cb3524", "#272e61", "Metropolitano", "Madrid"],
-  ["bar", "Barcelona", "BAR", "ESP", 529, "#a50044", "#004d98", "Spotify Camp Nou", "Barcelona"],
-  ["bet", "Real Betis", "BET", "ESP", 543, "#00954c", "#ffffff", "Benito Villamarín", "Sevilla"],
-  ["rma", "Real Madrid", "RMA", "ESP", 541, "#ffffff", "#febe10", "Santiago Bernabéu", "Madrid"],
-  ["vil", "Villarreal", "VIL", "ESP", 533, "#ffe667", "#005187", "La Cerámica", "Villarreal"],
-  ["fen", "Fenerbahçe", "FEN", "TUR", 611, "#163962", "#ffed00", "Şükrü Saracoğlu", "Estambul"],
-  ["gal", "Galatasaray", "GAL", "TUR", 645, "#a90432", "#fdb912", "RAMS Park", "Estambul"],
-  ["sha", "Shakhtar Donetsk", "SHA", "UKR", 550, "#f26522", "#000000", "Sede por confirmar", ""],
-  ["cbr", "Club Brugge", "BRU", "BEL", 569, "#0067ce", "#000000", "Jan Breydel", "Brujas"],
-  ["sla", "Slavia Praha", "SLA", "CZE", 560, "#c8102e", "#ffffff", "Fortuna Arena", "Praga"],
-  ["aek", "AEK Athens", "AEK", "GRE", 575, "#ffd200", "#000000", "OPAP Arena", "Atenas"],
-  ["lask", "LASK", "LASK", "AUT", null, "#000000", "#ffffff", "Raiffeisen Arena", "Linz"],
-  ["sab", "Sabah", "SAB", "AZE", null, "#ff6600", "#1b2a5c", "Bank Respublika Arena", "Bakú"],
+  ["ars", "Arsenal", "ARS", "ENG", 359, "#ef0107", "#063672", "Emirates Stadium", "Londres"],
+  ["avl", "Aston Villa", "AVL", "ENG", 362, "#670e36", "#95bfe5", "Villa Park", "Birmingham"],
+  ["liv", "Liverpool", "LIV", "ENG", 364, "#c8102e", "#00b2a9", "Anfield", "Liverpool"],
+  ["mci", "Manchester City", "MCI", "ENG", 382, "#6cabdd", "#1c2c5b", "Etihad Stadium", "Mánchester"],
+  ["mun", "Manchester United", "MUN", "ENG", 360, "#da291c", "#000000", "Old Trafford", "Mánchester"],
+  ["len", "Lens", "RCL", "FRA", 175, "#ffd700", "#e30613", "Stade Bollaert-Delelis", "Lens"],
+  ["lil", "Lille", "LIL", "FRA", 166, "#e01e13", "#0d1e3f", "Stade Pierre-Mauroy", "Lille"],
+  ["psg", "Paris Saint-Germain", "PSG", "FRA", 160, "#004170", "#da291c", "Parc des Princes", "París"],
+  ["bay", "Bayern München", "BAY", "GER", 132, "#dc052d", "#0066b2", "Allianz Arena", "Múnich"],
+  ["bvb", "Borussia Dortmund", "BVB", "GER", 124, "#fde100", "#000000", "Signal Iduna Park", "Dortmund"],
+  ["rbl", "Leipzig", "RBL", "GER", 11420, "#dd0741", "#ffffff", "Red Bull Arena", "Leipzig"],
+  ["vfb", "Stuttgart", "VFB", "GER", 134, "#e32219", "#ffffff", "MHPArena", "Stuttgart"],
+  ["int", "Inter", "INT", "ITA", 110, "#0068a8", "#000000", "San Siro", "Milán"],
+  ["nap", "Napoli", "NAP", "ITA", 114, "#12a0d7", "#ffffff", "Diego Armando Maradona", "Nápoles"],
+  ["rom", "Roma", "ROM", "ITA", 104, "#8e1f2f", "#f0bc42", "Stadio Olimpico", "Roma"],
+  ["com", "Como", "COM", "ITA", 2572, "#1b3d8f", "#ffffff", "Giuseppe Sinigaglia", "Como"],
+  ["fey", "Feyenoord", "FEY", "NED", 142, "#e30613", "#ffffff", "De Kuip", "Róterdam"],
+  ["psv", "PSV Eindhoven", "PSV", "NED", 148, "#ed1c24", "#ffffff", "Philips Stadion", "Eindhoven"],
+  ["bod", "Bodø/Glimt", "BOD", "NOR", 2980, "#ffd200", "#000000", "Aspmyra Stadion", "Bodø"],
+  ["vik", "Viking", "VIK", "NOR", 510, "#003b7b", "#ffffff", "Viking Stadion", "Stavanger"],
+  ["por", "Porto", "POR", "POR", 437, "#00428c", "#ffffff", "Estádio do Dragão", "Oporto"],
+  ["scp", "Sporting CP", "SCP", "POR", 2250, "#008057", "#ffffff", "José Alvalade", "Lisboa"],
+  ["slo", "Slovan Bratislava", "SLO", "SVK", 521, "#0058a3", "#ffffff", "Tehelné pole", "Bratislava"],
+  ["atm", "Atlético de Madrid", "ATM", "ESP", 1068, "#cb3524", "#272e61", "Metropolitano", "Madrid"],
+  ["bar", "Barcelona", "BAR", "ESP", 83, "#a50044", "#004d98", "Spotify Camp Nou", "Barcelona"],
+  ["bet", "Real Betis", "BET", "ESP", 244, "#00954c", "#ffffff", "Benito Villamarín", "Sevilla"],
+  ["rma", "Real Madrid", "RMA", "ESP", 86, "#ffffff", "#febe10", "Santiago Bernabéu", "Madrid"],
+  ["vil", "Villarreal", "VIL", "ESP", 102, "#ffe667", "#005187", "La Cerámica", "Villarreal"],
+  ["fen", "Fenerbahçe", "FEN", "TUR", 436, "#163962", "#ffed00", "Şükrü Saracoğlu", "Estambul"],
+  ["gal", "Galatasaray", "GAL", "TUR", 432, "#a90432", "#fdb912", "RAMS Park", "Estambul"],
+  ["sha", "Shakhtar Donetsk", "SHA", "UKR", 493, "#f26522", "#000000", "Sede por confirmar", ""],
+  ["cbr", "Club Brugge", "BRU", "BEL", 570, "#0067ce", "#000000", "Jan Breydel", "Brujas"],
+  ["sla", "Slavia Praha", "SLA", "CZE", 494, "#c8102e", "#ffffff", "Fortuna Arena", "Praga"],
+  ["aek", "AEK Athens", "AEK", "GRE", 887, "#ffd200", "#000000", "OPAP Arena", "Atenas"],
+  ["lask", "LASK", "LASK", "AUT", 4411, "#000000", "#ffffff", "Raiffeisen Arena", "Linz"],
+  ["sab", "Sabah", "SAB", "AZE", 21922, "#ff6600", "#1b2a5c", "Bank Respublika Arena", "Bakú"],
 ];
 
 const EQUIPOS: Record<string, Equipo> = Object.fromEntries(
@@ -1327,9 +1327,74 @@ const GEO_CONTINENTES = CONTINENTES.map((c) => ({
 }));
 /** Por debajo de este zoom efectivo el mapa se ve por continentes; al acercarse aparecen los países. */
 const ZOOM_PAISES = 1.7;
+/** Acercamiento máximo: suficiente para ver estados, provincias y ciudades. */
+const ZOOM_MAX = 40;
+/** Desde este zoom se usan costas y fronteras más finas (Natural Earth 1:50m) y aparecen los estados de todos los países. */
+const ZOOM_DETALLE = 1.7;
+const ZOOM_ESTADOS = 2.6;
+const ZOOM_NOMBRES_ESTADOS = 4.5;
+
+/** Filtro para nombres en pantalla: deja pasar uno solo si no choca con otro que ya pasó. */
+function sinEncimar<T>(caja: (x: T) => { x: number; y: number; ancho: number }) {
+  const puestos: { x: number; y: number; ancho: number }[] = [];
+  return (x: T) => {
+    const c = caja(x);
+    if (puestos.some((o) => Math.abs(o.x - c.x) < c.ancho + o.ancho && Math.abs(o.y - c.y) < 16)) return false;
+    puestos.push(c);
+    return true;
+  };
+}
+
+interface PropsEstado {
+  name: string;
+  iso_a2: string;
+  lat: number;
+  lon: number;
+}
+interface DetalleMapa {
+  paises: FeatureCollection<Geometry, { name: string }>;
+  estados: FeatureCollection<Geometry, PropsEstado>;
+  bordesEstados: MultiLineString;
+}
+
+// Mapas finos (archivos propios de la app en /public/mapas, sin APIs): se bajan una sola vez, la primera vez que alguien acerca el mapa.
+let detalleMapa: Promise<DetalleMapa | null> | null = null;
+function cargarDetalleMapa() {
+  detalleMapa ??= (async () => {
+    try {
+      const [p, e] = await Promise.all([fetch("/mapas/paises-50m.json").then((r) => r.json()), fetch("/mapas/estados.json").then((r) => r.json())]);
+      const tp = p as Topology<{ countries: GeometryCollection<{ name: string }> }>;
+      const te = e as Topology<{ adm1: GeometryCollection<PropsEstado> }>;
+      return {
+        paises: feature(tp, tp.objects.countries) as FeatureCollection<Geometry, { name: string }>,
+        estados: feature(te, te.objects.adm1) as FeatureCollection<Geometry, PropsEstado>,
+        bordesEstados: mesh(te, te.objects.adm1, (a, b) => a !== b),
+      };
+    } catch {
+      detalleMapa = null;
+      return null;
+    }
+  })();
+  return detalleMapa;
+}
 
 /** País y estado (EE. UU.) del punto, sin internet, con los mismos datos del dibujo. */
 const ESTADOS_EEUU = feature(TOPO_EEUU, TOPO_EEUU.objects.states) as FeatureCollection<Geometry, { name: string }>;
+const NOMBRE_ESTADO_EEUU: Record<string, string> = {
+  "New Mexico": "Nuevo México", "New York": "Nueva York", "New Jersey": "Nueva Jersey", "New Hampshire": "Nuevo Hampshire",
+  "North Carolina": "Carolina del Norte", "South Carolina": "Carolina del Sur", "North Dakota": "Dakota del Norte",
+  "South Dakota": "Dakota del Sur", "West Virginia": "Virginia Occidental", Pennsylvania: "Pensilvania", Louisiana: "Luisiana",
+  Hawaii: "Hawái", "District of Columbia": "Washington D. C.", Oregon: "Oregón", Michigan: "Míchigan", Tennessee: "Tennessee",
+};
+/** Estados de EE. UU. con los mismos límites que sus regiones (us-atlas), para encuadrarlos y nombrarlos. */
+const ESTADOS_EEUU_DETALLE: FeatureCollection<Geometry, PropsEstado> = {
+  type: "FeatureCollection",
+  features: ESTADOS_EEUU.features.map((f) => {
+    const [lon, lat] = geoCentroid(f);
+    return { ...f, properties: { name: NOMBRE_ESTADO_EEUU[f.properties?.name ?? ""] ?? f.properties?.name ?? "", iso_a2: "US", lat, lon } };
+  }),
+};
+const BORDES_EEUU = mesh(TOPO_EEUU, TOPO_EEUU.objects.states, (a, b) => a !== b);
 function lugarSinInternet(lat: number, lng: number): { pais: string; estado: string } {
   const f = MUNDO.features.find((x) => geoContains(x, [lng, lat]));
   if (!f) return { pais: "", estado: "" };
@@ -1634,6 +1699,13 @@ function MapaSvg({
   );
   const esfera = useMemo(() => camino(ESFERA) ?? "", [camino]);
   const continentes = useMemo(() => GEO_CONTINENTES.map((c) => ({ ...c, d: camino(c.geo) ?? "" })), [camino]);
+  const [detalle, setDetalle] = useState<DetalleMapa | null>(null);
+  const formasFinas = useMemo(
+    () => detalle?.paises.features.map((f, i) => ({ id: String(f.id ?? `f${i}`), nombre: f.properties?.name ?? "", d: camino(f) ?? "" })) ?? null,
+    [detalle, camino],
+  );
+  const bordesEstados = useMemo(() => (detalle ? (camino(detalle.bordesEstados) ?? "") : ""), [detalle, camino]);
+  const bordesEeuu = useMemo(() => camino(BORDES_EEUU) ?? "", [camino]);
   const reticula = useMemo(() => camino(geoGraticule10()) ?? "", [camino]);
   const regionesEeuu = useMemo(() => GEO_REGIONES_EEUU.map((r) => ({ ...r, d: camino(r.geo) ?? "" })), [camino]);
   const regionesMexico = useMemo(
@@ -1662,7 +1734,7 @@ function MapaSvg({
 
   const limitar = useCallback(
     (v: VistaMapa): VistaMapa => {
-      const k = Math.min(16, Math.max(1, v.k));
+      const k = Math.min(ZOOM_MAX, Math.max(1, v.k));
       const { w, h } = tam;
       return { k, x: Math.min(w * 0.6, Math.max(w - w * k - w * 0.6, v.x)), y: Math.min(h * 0.6, Math.max(h - h * k - h * 0.6, v.y)) };
     },
@@ -1723,7 +1795,7 @@ function MapaSvg({
   const zoomEn = useCallback(
     (sx: number, sy: number, nk: number) => {
       const v = vistaRef.current;
-      const k = Math.min(16, Math.max(1, nk));
+      const k = Math.min(ZOOM_MAX, Math.max(1, nk));
       setVista(limitar({ k, x: sx - (sx - v.x) * (k / v.k), y: sy - (sy - v.y) * (k / v.k) }));
     },
     [limitar],
@@ -1735,7 +1807,9 @@ function MapaSvg({
     const rueda = (e: WheelEvent) => {
       e.preventDefault();
       const r = el.getBoundingClientRect();
-      zoomEn(e.clientX - r.left, e.clientY - r.top, vistaRef.current.k * Math.exp(-e.deltaY * 0.0018));
+      // Rueda o pellizco del trackpad: pasos suaves, sin brincos aunque la rueda mande valores grandes.
+      const d = Math.max(-120, Math.min(120, e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY));
+      zoomEn(e.clientX - r.left, e.clientY - r.top, vistaRef.current.k * Math.exp(-d * 0.0018));
     };
     el.addEventListener("wheel", rueda, { passive: false });
     return () => el.removeEventListener("wheel", rueda);
@@ -1749,11 +1823,19 @@ function MapaSvg({
   const alBajar = (e: React.PointerEvent<SVGSVGElement>) => {
     if ((e.target as Element).closest("[data-pin]")) return;
     if (animacion.current) cancelAnimationFrame(animacion.current);
+    // El primer dedo limpia dedos "fantasma" que nunca avisaron que se levantaron (si no, el pellizco se dispara).
+    if (e.isPrimary) punteros.current.clear();
     punteros.current.set(e.pointerId, local(e));
     const pts = [...punteros.current.values()];
     if (pts.length === 1) gesto.current = { ...pts[0], vista: vistaRef.current, movido: false };
-    if (pts.length === 2) {
-      gesto.current = { x: 0, y: 0, vista: vistaRef.current, movido: true, dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), k: vistaRef.current.k };
+    if (pts.length >= 2) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* sin captura: se sigue igual */
+      }
+      const dist = Math.max(40, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
+      gesto.current = { x: 0, y: 0, vista: vistaRef.current, movido: true, dist, k: vistaRef.current.k };
     }
   };
 
@@ -1763,10 +1845,14 @@ function MapaSvg({
     const pts = [...punteros.current.values()];
     const g = gesto.current;
     if (pts.length >= 2 && g.dist && g.k) {
-      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      zoomEn((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2, (g.k * d) / g.dist);
+      const d = Math.max(40, Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y));
+      // Cada movimiento cambia el zoom poco a poco (máx. ×1.25 por cuadro) para que nunca brinque de golpe.
+      const objetivo = (g.k * d) / g.dist;
+      const actual = vistaRef.current.k;
+      zoomEn((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2, Math.min(actual * 1.25, Math.max(actual / 1.25, objetivo)));
       return;
     }
+    if (g.dist) return; // quedó un dedo de un pellizco: espera a que se reinicie el gesto
     const dx = pts[0].x - g.x;
     const dy = pts[0].y - g.y;
     if (!g.movido && Math.hypot(dx, dy) > 5) {
@@ -1782,6 +1868,11 @@ function MapaSvg({
     const p = local(e);
     punteros.current.delete(e.pointerId);
     if (punteros.current.size === 0) gesto.current = null;
+    else {
+      // Al soltar un dedo del pellizco, el que queda sigue arrastrando desde donde está (sin saltos).
+      const [resto] = [...punteros.current.values()];
+      gesto.current = { ...resto, vista: vistaRef.current, movido: true };
+    }
     if (!g || g.movido) return;
     const v = vistaRef.current;
     const coords = proy.invert?.([(p.x - v.x) / v.k, (p.y - v.y) / v.k]);
@@ -1792,7 +1883,23 @@ function MapaSvg({
     if (modoPin) return onElegir(lat, lng);
     // Vista por continentes: tocar uno acerca el mapa a esa zona.
     const escala = Math.min(1, Math.max(tam.w, 1) / 820);
-    if (v.k * escala >= ZOOM_PAISES) return;
+    if (v.k * escala >= ZOOM_PAISES) {
+      // Vista por países: tocar un país lo encuadra; si ya está encuadrado, tocar un estado lo encuadra a él.
+      const pais = (detalle?.paises ?? MUNDO).features.find((f) => geoContains(f, [lng, lat]));
+      const estado =
+        ESTADOS_EEUU_DETALLE.features.find((f) => geoContains(f, [lng, lat])) ?? detalle?.estados.features.find((f) => geoContains(f, [lng, lat]));
+      // Un nivel a la vez: primero el país; el estado solo cuando ya se ven las líneas de los estados.
+      for (const f of v.k * escala >= ZOOM_ESTADOS ? [pais, estado] : [pais]) {
+        if (!f) continue;
+        const [[x0, y0], [x1, y1]] = camino.bounds(f);
+        const nk = Math.min(ZOOM_MAX, v.k * 5, 0.8 * Math.min(tam.w / Math.max(x1 - x0, 1), tam.h / Math.max(y1 - y0, 1)));
+        if (nk > v.k * 1.3) return irA({ k: nk, x: tam.w / 2 - ((x0 + x1) / 2) * nk, y: tam.h / 2 - ((y0 + y1) / 2) * nk });
+      }
+      // País muy grande o ya encuadrado: acerca al doble justo donde tocaste.
+      const nk = Math.min(ZOOM_MAX, v.k * 2);
+      if (nk > v.k) irA({ k: nk, x: tam.w / 2 - ((p.x - v.x) / v.k) * nk, y: tam.h / 2 - ((p.y - v.y) / v.k) * nk });
+      return;
+    }
     // Si el toque cae en el mar, gana el continente cuyo nombre quedó más cerca del dedo.
     const cerca = () => {
       let mejor: (typeof GEO_CONTINENTES)[number] | undefined;
@@ -1829,6 +1936,11 @@ function MapaSvg({
   // Zoom "efectivo": en pantallas angostas el mundo se dibuja más chico, así que los nombres aparecen más tarde.
   const ke = k * Math.min(1, Math.max(tam.w, 1) / 820);
   const porContinentes = ke < ZOOM_PAISES;
+  const quiereDetalle = ke >= ZOOM_DETALLE;
+  useEffect(() => {
+    if (quiereDetalle && !detalle) cargarDetalleMapa().then((d) => d && setDetalle(d));
+  }, [quiereDetalle, detalle]);
+  const formasVisibles = quiereDetalle && formasFinas ? formasFinas : formas;
   const tinta = noche ? "#00f0ff" : "#0b0e28";
   const fondoTexto = noche ? "#0b0e28" : "#ffffff";
   const tamEscudo = k * Math.min(1, Math.max(tam.w, 1) / 820) >= 7 ? 28 : k * Math.min(1, Math.max(tam.w, 1) / 820) >= 4.5 ? 22 : 16;
@@ -1917,11 +2029,11 @@ function MapaSvg({
               ))
             ) : (
               <>
-            {formas.map((f) => (
+            {formasVisibles.map((f) => (
               <path
                 key={f.id}
                 d={f.d}
-                fill={f.id === ID_FRANCIA ? "url(#oro-francia)" : f.id === ID_ESPANA ? (noche ? "#5a1020" : "#e4504f") : noche ? "#1d2560" : COLOR_PAIS[f.id] ?? PASTEL[0]}
+                fill={f.id === ID_FRANCIA ? "url(#oro-francia)" : f.id === ID_ESPANA ? (noche ? "#5a1020" : "#e4504f") : noche ? "#1d2560" : COLOR_PAIS[f.id] ?? PASTEL[hash(f.id) % PASTEL.length]}
                 stroke={f.id === ID_FRANCIA ? "#0b0e28" : tinta}
                 strokeWidth={f.id === ID_FRANCIA ? 2.2 : noche ? 0.8 : 1.4}
                 strokeLinejoin="round"
@@ -1958,6 +2070,21 @@ function MapaSvg({
             )}
             {espana && <path d={espana.d} fill="none" stroke={tinta} strokeWidth={1.8} vectorEffect="non-scaling-stroke" />}
 
+            {/* Estados y provincias de todos los países al acercar */}
+            {ke >= ZOOM_ESTADOS && (
+              <path
+                d={`${bordesEstados}${bordesEeuu}`}
+                fill="none"
+                stroke={tinta}
+                strokeOpacity={noche ? 0.45 : 0.55}
+                strokeWidth={ke >= 8 ? 1.1 : 0.8}
+                strokeDasharray="4 3"
+                strokeLinejoin="round"
+                vectorEffect="non-scaling-stroke"
+                pointerEvents="none"
+              />
+            )}
+
               </>
             )}
 
@@ -1992,6 +2119,17 @@ function MapaSvg({
                 </text>
               ) : null;
             })}
+
+          {/* Nombres de estados y provincias (zoom alto), solo los que caen en pantalla */}
+          {!porContinentes &&
+            detalle &&
+            ke >= ZOOM_NOMBRES_ESTADOS &&
+            [...ESTADOS_EEUU_DETALLE.features, ...detalle.estados.features]
+              .map((f) => ({ f, s: aPantalla(f.properties.lon, f.properties.lat) }))
+              .filter((x): x is { f: Feature<Geometry, PropsEstado>; s: { x: number; y: number } } => visible(x.s, 0))
+              .filter(sinEncimar((x) => ({ ...x.s, ancho: x.f.properties.name.length * 3.6 + 10 })))
+              .slice(0, 50)
+              .map(({ f, s }, i) => <g key={`${f.properties.iso_a2}-${f.properties.name}-${i}`}>{etiqueta(f.properties.name, s, "region")}</g>)}
 
           {/* Nombres de países y regiones */}
           {!porContinentes && NOMBRES_PAISES.map(([id, nombre, lon, lat, minK]) => {
@@ -2050,7 +2188,8 @@ function MapaSvg({
             Object.entries(ESTADIOS).map(([id, [lat, lon]]) => {
               const eq = EQUIPOS[id];
               const s = aPantalla(lon, lat);
-              if (!eq || !visible(s)) return null;
+              // El PSG ya está en Francia con sus dos estrellas: un solo escudo.
+              if (id === "psg" || !eq || !visible(s)) return null;
               return (
                 <g key={id} {...(modoPin ? {} : { "data-pin": true })} className="cursor-pointer" onClick={() => !modoPin && setFicha(id)} role="button" aria-label={`Historia de ${eq.nombre} en la Champions`}>
                   <circle cx={s.x} cy={s.y} r={tamEscudo / 2 + 6} fill="transparent" />
