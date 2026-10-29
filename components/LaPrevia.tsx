@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useTransform } from "framer-motion";
-import { geoCentroid, geoContains, geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
+import { geoBounds, geoCentroid, geoContains, geoGraticule10, geoNaturalEarth1, geoPath } from "d3-geo";
 import { feature, merge, mesh, neighbors } from "topojson-client";
 import {
   fechaLocal,
@@ -1271,7 +1271,7 @@ const REGIONES_MEXICO: { nombre: string; color: string; puntos: [number, number]
 ];
 
 /** Nombres en español para ubicar el mapa: [id ISO, nombre, lon, lat, zoom mínimo]. Europa aparece al acercar. */
-const NOMBRES_PAISES: [string, string, number, number, number][] = [
+const NOMBRES_MANUALES: [string, string, number, number, number][] = [
   ["124", "Canadá", -105, 58, 1], ["840", "Estados Unidos", -99, 39.5, 1], ["484", "México", -102.5, 24, 1], ["076", "Brasil", -52, -10, 1],
   ["032", "Argentina", -65, -35, 1], ["643", "Rusia", 95, 62, 1], ["156", "China", 103, 34, 1], ["356", "India", 79, 22, 1],
   ["036", "Australia", 134, -25, 1], ["304", "Groenlandia", -41, 73, 1], ["398", "Kazajistán", 67, 48, 1.4], ["012", "Argelia", 2.5, 27, 1.4],
@@ -1289,6 +1289,77 @@ const NOMBRES_PAISES: [string, string, number, number, number][] = [
   ["792", "Turquía", 35, 39, 2], ["804", "Ucrania", 31.5, 49, 2.2], ["578", "Noruega", 9, 61.5, 2.2], ["752", "Suecia", 15, 62.5, 2.2],
   ["246", "Finlandia", 26, 63.5, 2.4], ["208", "Dinamarca", 9.3, 56.1, 3.8], ["031", "Azerbaiyán", 47.7, 40.3, 4], ["112", "Bielorrusia", 28, 53.5, 3],
 ];
+
+/**
+ * Todos los países del mundo (Natural Earth 1:50m) con su nombre en español, el centro de su territorio principal
+ * y desde qué zoom se nombran según su tamaño. Generado una vez con i18n-iso-countries + d3-geo.
+ */
+const NOMBRES_AUTOMATICOS: [string, string, number, number, number][] = [
+  ["716",  "Zimbabue",  29.9,  -19,  2.2], ["894",  "Zambia",  27.8,  -13.5,  1.7], ["887",  "Yemen",  47.5,  15.9,  2.2], ["704",  "Vietnam",  106.3,  16.5,  2.2],
+  ["862",  "Venezuela",  -66.2,  7.1,  1.7], ["336",  "Santa Sede",  12.4,  41.9,  9], ["548",  "Vanuatu",  166.8,  -15.2,  6], ["860",  "Uzbekistán",  63.3,  41.8,  2.2],
+  ["858",  "Uruguay",  -56,  -32.8,  2.2], ["583",  "Micronesia",  158.2,  6.9,  9], ["584",  "Islas Marshall",  171.2,  7.1,  9], ["580",  "Islas Marianas del Norte",  145.7,  15.2,  9],
+  ["850",  "Islas Vírgenes de los Estados Unidos",  -64.8,  17.7,  9], ["316",  "Guam",  144.8,  13.4,  9], ["016",  "Samoa Americana",  -170.7,  -14.3,  9], ["630",  "Puerto Rico",  -66.5,  18.2,  6],
+  ["840",  "Estados Unidos",  -98.8,  39.9,  1], ["239",  "Georgia del Sur y las Islas Sandwich del Sur",  -36.7,  -54.4,  6], ["086",  "Territorio Británico del Océano Índico",  72.4,  -7.3,  9], ["654",  "Santa Helena,  Ascensión y Tristán de Acuña",  -5.7,  -16,  9],
+  ["612",  "Pitcairn",  -128.3,  -24.4,  9], ["660",  "Anguila",  -63.1,  18.2,  9], ["238",  "Islas Malvinas",  -58.8,  -51.7,  6], ["136",  "Islas Caimán",  -81.3,  19.3,  9],
+  ["060",  "Bermudas",  -64.8,  32.3,  9], ["092",  "Islas Vírgenes británicas",  -64.6,  18.4,  9], ["796",  "Islas Turcas y Caicos",  -71.7,  21.8,  9], ["500",  "Montserrat",  -62.2,  16.7,  9],
+  ["832",  "Jersey",  -2.1,  49.2,  9], ["831",  "Guernsey",  -2.6,  49.5,  9], ["833",  "Isla de Man",  -4.5,  54.2,  9], ["826",  "Reino Unido",  -2.4,  53.8,  2.2],
+  ["784",  "Emiratos Árabes Unidos",  54.3,  23.9,  3], ["804",  "Ucrania",  31.3,  49.2,  1.7], ["800",  "Uganda",  32.4,  1.3,  2.2], ["795",  "Turkmenistán",  59.4,  39.1,  2.2],
+  ["792",  "Turquía",  35.4,  39.1,  1.7], ["788",  "Túnez",  9.6,  34.1,  2.2], ["780",  "Trinidad y Tobago",  -61.3,  10.4,  6], ["776",  "Tonga",  -175.2,  -21.2,  9],
+  ["768",  "Togo",  1,  8.5,  3], ["626",  "Timor-Leste",  125.9,  -8.8,  4.2], ["764",  "Tailandia",  101,  15.1,  1.7], ["834",  "Tanzania",  34.8,  -6.3,  1.7],
+  ["762",  "Tayikistán",  71,  38.5,  3], ["158",  "Taiwán",  121,  23.7,  4.2], ["760",  "República Árabe Siria",  38.5,  35,  2.2], ["756",  "Suiza",  8.2,  46.8,  3],
+  ["752",  "Suecia",  16.2,  62.4,  2.2], ["748",  "Esuatini",  31.5,  -26.6,  4.2], ["740",  "Suriname",  -55.9,  4.1,  3], ["728",  "Sudán del Sur",  30.3,  7.3,  1.7],
+  ["729",  "Sudán",  29.9,  16,  1], ["144",  "Sri Lanka",  80.7,  7.6,  3], ["724",  "España",  -3.6,  40.4,  2.2], ["410",  "República de Corea",  127.9,  36.5,  3],
+  ["710",  "Sudáfrica",  25.2,  -29,  1.7], ["706",  "Somalia",  45.7,  4.7,  2.2], ["090",  "Islas Salomón",  160.2,  -9.6,  6], ["703",  "Eslovaquia",  19.5,  48.7,  3],
+  ["705",  "Eslovenia",  14.8,  46.1,  4.2], ["702",  "Singapur",  103.8,  1.4,  9], ["694",  "Sierra Leona",  -11.8,  8.6,  3], ["690",  "Seychelles",  55.5,  -4.7,  9],
+  ["688",  "Serbia",  20.8,  44.2,  3], ["686",  "Senegal",  -14.5,  14.4,  2.2], ["682",  "Arabia Saudita",  44.7,  24.1,  1], ["678",  "Santo Tomé y Príncipe",  6.6,  0.2,  9],
+  ["674",  "San Marino",  12.5,  43.9,  9], ["882",  "Samoa",  -172.4,  -13.6,  9], ["670",  "San Vicente y las Granadinas",  -61.2,  13.3,  9], ["662",  "Santa Lucía",  -61,  13.9,  9],
+  ["659",  "Saint Kitts y Nevis",  -62.7,  17.3,  9], ["646",  "Ruanda",  29.9,  -2,  4.2], ["643",  "Rusia",  95.5,  65.9,  1], ["642",  "Rumanía",  25,  45.8,  2.2],
+  ["634",  "Catar",  51.2,  25.3,  4.2], ["620",  "Portugal",  -8,  39.7,  3], ["616",  "Polonia",  19.4,  52.1,  2.2], ["608",  "Filipinas",  121.4,  15.9,  3],
+  ["604",  "Perú",  -74.4,  -9.1,  1.7], ["600",  "Paraguay",  -58.4,  -23.2,  2.2], ["598",  "Papua Nueva Guinea",  144.2,  -6.6,  2.2], ["591",  "Panamá",  -80.1,  8.5,  3],
+  ["585",  "Palau",  134.6,  7.5,  9], ["586",  "Pakistán",  69.2,  29.9,  1.7], ["512",  "Omán",  56.1,  20.6,  2.2], ["578",  "Noruega",  12.2,  63.8,  2.2],
+  ["408",  "República Popular Democrática de Corea",  127.2,  40.1,  3], ["566",  "Nigeria",  8.1,  9.6,  1.7], ["562",  "Níger",  9.3,  17.4,  1.7], ["558",  "Nicaragua",  -85,  12.8,  3],
+  ["554",  "Nueva Zelanda",  170.6,  -43.9,  3], ["570",  "Niue",  -169.9,  -19,  9], ["184",  "Islas Cook",  -159.8,  -21.2,  9], ["528",  "Países Bajos",  5.6,  52.3,  4.2],
+  ["533",  "Aruba",  -70,  12.5,  9], ["531",  "Curaçao",  -69,  12.2,  9], ["524",  "Nepal",  83.9,  28.3,  3], ["520",  "Nauru",  166.9,  -0.5,  9],
+  ["516",  "Namibia",  17.2,  -22.1,  1.7], ["508",  "Mozambique",  35.6,  -17.2,  1.7], ["504",  "Marruecos",  -8.7,  29.8,  1.7], ["732",  "Sahara Occidental",  -12.3,  24.2,  3],
+  ["499",  "Montenegro",  19.2,  42.8,  4.2], ["496",  "Mongolia",  103.1,  47,  1], ["498",  "Moldavia",  28.5,  47.2,  4.2], ["492",  "Mónaco",  7.4,  43.8,  9],
+  ["484",  "México",  -102.2,  23.9,  1], ["480",  "Mauricio",  57.6,  -20.3,  9], ["478",  "Mauritania",  -10.4,  20.2,  1.7], ["470",  "Malta",  14.4,  35.9,  9],
+  ["466",  "Malí",  -3.6,  17.3,  1.7], ["462",  "Maldivas",  73.5,  4.2,  9], ["458",  "Malasia",  114.7,  3.6,  2.2], ["454",  "Malaui",  34.3,  -13.2,  3],
+  ["450",  "Madagascar",  46.7,  -19.3,  1.7], ["807",  "Macedonia del Norte",  21.7,  41.6,  4.2], ["442",  "Luxemburgo",  6.1,  49.8,  6], ["440",  "Lituania",  23.9,  55.3,  3],
+  ["438",  "Liechtenstein",  9.5,  47.1,  9], ["434",  "Libia",  18.1,  27,  1], ["430",  "Liberia",  -9.3,  6.5,  3], ["426",  "Lesoto",  28.2,  -29.6,  4.2],
+  ["422",  "Líbano",  35.9,  33.9,  4.2], ["428",  "Letonia",  24.9,  56.9,  3], ["418",  "República Democrática Popular de Lao",  103.8,  18.5,  2.2], ["417",  "Kirguistán",  74.5,  41.5,  2.2],
+  ["414",  "Kuwait",  47.6,  29.3,  4.2], ["296",  "Kiribati",  -157.4,  1.9,  9], ["404",  "Kenia",  37.8,  0.6,  1.7], ["398",  "Kazajistán",  67.2,  48.4,  1],
+  ["400",  "Jordania",  36.8,  31.2,  3], ["392",  "Japón",  137.9,  36.6,  2.2], ["388",  "Jamaica",  -77.3,  18.2,  4.2], ["380",  "Italia",  12.3,  43.5,  2.2],
+  ["376",  "Israel",  35,  31.5,  4.2], ["275",  "Palestina",  35.2,  31.9,  6], ["372",  "Irlanda",  -8.1,  53.2,  3], ["368",  "Iraq",  43.8,  33,  2.2],
+  ["364",  "República Islámica de Irán",  54.4,  32.5,  1], ["360",  "Indonesia",  114,  -0.2,  1.7], ["356",  "India",  79.5,  22.8,  1], ["352",  "Islandia",  -18.6,  65,  3],
+  ["348",  "Hungría",  19.4,  47.2,  3], ["340",  "Honduras",  -86.6,  14.8,  3], ["332",  "Haití",  -72.7,  18.9,  4.2], ["328",  "Guyana",  -59,  4.8,  2.2],
+  ["624",  "Guinea Bissau",  -14.9,  12.1,  4.2], ["324",  "Guinea",  -10.9,  10.4,  2.2], ["320",  "Guatemala",  -90.4,  15.7,  3], ["308",  "Granada",  -61.7,  12.1,  9],
+  ["300",  "Grecia",  22.6,  39.5,  3], ["288",  "Ghana",  -1.2,  7.9,  2.2], ["276",  "Alemania",  10.4,  51,  2.2], ["268",  "Georgia",  43.5,  42.2,  3],
+  ["270",  "Gambia",  -15.4,  13.5,  4.2], ["266",  "Gabón",  11.8,  -0.6,  2.2], ["250",  "Francia",  2.5,  46.6,  1.7], ["666",  "San Pedro y Miquelón",  -56.3,  46.9,  9],
+  ["876",  "Wallis y Futuna",  -178.1,  -14.3,  9], ["663",  "Saint Martin (francesa)",  -63.1,  18.1,  9], ["652",  "Saint Barthélemy",  -62.8,  17.9,  9], ["258",  "Polinesia Francesa",  -149.4,  -17.7,  9],
+  ["540",  "Nueva Caledonia",  165.5,  -21.3,  4.2], ["260",  "Tierras Australes Francesas",  69.5,  -49.3,  6], ["248",  "Islas Åland",  19.9,  60.2,  9], ["246",  "Finlandia",  26.2,  64.3,  2.2],
+  ["242",  "Fiji",  178,  -17.8,  4.2], ["231",  "Etiopía",  39.6,  8.6,  1.7], ["233",  "Estonia",  25.8,  58.7,  3], ["232",  "Eritrea",  38.8,  15.4,  3],
+  ["226",  "Guinea Ecuatorial",  10.5,  1.6,  4.2], ["222",  "El Salvador",  -88.9,  13.7,  4.2], ["818",  "Egipto",  29.9,  26.5,  1.7], ["218",  "Ecuador",  -78.4,  -1.4,  2.2],
+  ["214",  "República Dominicana",  -70.5,  18.9,  3], ["212",  "Dominica",  -61.4,  15.4,  9], ["262",  "Yibuti",  42.6,  11.7,  4.2], ["304",  "Groenlandia",  -41.8,  73.1,  1],
+  ["234",  "Islas Feroe",  -6.9,  62.2,  9], ["208",  "Dinamarca",  9.3,  56.2,  4.2], ["203",  "República Checa",  15.3,  49.7,  3], ["196",  "Chipre",  33,  34.9,  6],
+  ["192",  "Cuba",  -78.9,  21.6,  3], ["191",  "Croacia",  16.4,  45.2,  3], ["384",  "Costa de Marfil",  -5.6,  7.6,  2.2], ["188",  "Costa Rica",  -84.2,  10,  3],
+  ["180",  "Congo (República Democrática del)",  23.6,  -2.9,  1], ["178",  "Congo",  15.2,  -0.8,  2.2], ["174",  "Comoras",  43.3,  -11.7,  9], ["170",  "Colombia",  -73.1,  3.9,  1.7],
+  ["156",  "China",  103.3,  36.8,  1], ["446",  "Macao",  113.5,  22.2,  9], ["344",  "Hong Kong",  114.1,  22.4,  9], ["152",  "Chile",  -70.9,  -34.4,  1.7],
+  ["148",  "Chad",  18.6,  15.3,  1.7], ["140",  "República Centroafricana",  20.5,  6.6,  1.7], ["132",  "Cabo Verde",  -23.6,  15.1,  9], ["124",  "Canadá",  -99,  58.6,  1],
+  ["120",  "Camerún",  12.7,  5.7,  2.2], ["116",  "Camboya",  104.9,  12.7,  2.2], ["104",  "Myanmar",  96.5,  21.1,  1.7], ["108",  "Burundi",  29.9,  -3.4,  4.2],
+  ["854",  "Burkina Faso",  -1.8,  12.3,  2.2], ["100",  "Bulgaria",  25.2,  42.8,  3], ["096",  "Brunei Darussalam",  114.6,  4.5,  6], ["076",  "Brasil",  -53.2,  -10.7,  1],
+  ["072",  "Botswana",  23.8,  -22.2,  1.7], ["070",  "Bosnia y Herzegovina",  17.8,  44.2,  3], ["068",  "Bolivia",  -64.7,  -16.7,  1.7], ["064",  "Bután",  90.4,  27.4,  4.2],
+  ["204",  "Benin",  2.3,  9.6,  3], ["084",  "Belice",  -88.7,  17.2,  4.2], ["056",  "Bélgica",  4.6,  50.6,  4.2], ["112",  "Bielorrusia",  28,  53.5,  2.2],
+  ["052",  "Barbados",  -59.6,  13.2,  9], ["050",  "Bangladesh",  90.2,  23.9,  3], ["048",  "Bahrein",  50.5,  26,  9], ["044",  "Bahamas",  -78,  24.7,  6],
+  ["031",  "Azerbaiyán",  47.7,  40.3,  3], ["040",  "Austria",  14.1,  47.6,  3], ["036",  "Australia",  134.2,  -25.6,  1], ["334",  "Heard e Islas McDonald",  73.5,  -53.1,  9],
+  ["574",  "Isla Norfolk",  167.9,  -29.1,  9], ["036",  "Australia",  123.6,  -12.4,  9], ["051",  "Armenia",  44.9,  40.3,  4.2], ["032",  "Argentina",  -64.7,  -34.5,  1],
+  ["028",  "Antigua y Barbuda",  -61.8,  17.1,  9], ["024",  "Angola",  17.6,  -12.3,  1.7], ["020",  "Andorra",  1.6,  42.5,  9], ["012",  "Argelia",  2.6,  28.1,  1],
+  ["008",  "Albania",  20.1,  41.1,  4.2], ["004",  "Afganistán",  65.9,  33.8,  1.7], ["010",  "Antártida",  83,  -84.7,  1], ["534",  "Sint Maarten (neerlandesa)",  -63.1,  18.1,  9],
+];
+// Los manuales (posición y zoom afinados a mano) mandan; el resto se completa con los automáticos. Primero los grandes.
+const NOMBRES_PAISES: [string, string, number, number, number][] = [
+  ...NOMBRES_MANUALES,
+  ...NOMBRES_AUTOMATICOS.filter((a) => !NOMBRES_MANUALES.some((m) => m[0] === a[0])),
+].sort((a, b) => a[4] - b[4]);
 
 /* Continentes: vista inicial del mapa. Turquía, Chipre y el Cáucaso van con Europa, como en la UEFA. */
 type ClaveContinente = "na" | "sa" | "eu" | "af" | "as" | "oc" | "an";
@@ -1335,8 +1406,7 @@ const ZOOM_ESTADOS = 2.6;
 const ZOOM_NOMBRES_ESTADOS = 4.5;
 
 /** Filtro para nombres en pantalla: deja pasar uno solo si no choca con otro que ya pasó. */
-function sinEncimar<T>(caja: (x: T) => { x: number; y: number; ancho: number }) {
-  const puestos: { x: number; y: number; ancho: number }[] = [];
+function sinEncimar<T>(caja: (x: T) => { x: number; y: number; ancho: number }, puestos: { x: number; y: number; ancho: number }[] = []) {
   return (x: T) => {
     const c = caja(x);
     if (puestos.some((o) => Math.abs(o.x - c.x) < c.ancho + o.ancho && Math.abs(o.y - c.y) < 16)) return false;
@@ -1709,6 +1779,11 @@ function MapaSvg({
   );
   const bordesEstados = useMemo(() => (detalle ? (camino(detalle.bordesEstados) ?? "") : ""), [detalle, camino]);
   const bordesEeuu = useMemo(() => camino(BORDES_EEUU) ?? "", [camino]);
+  // Cajas de cada estado para saber rápido en cuál está el centro de la pantalla.
+  const cajasEstados = useMemo(
+    () => [...ESTADOS_EEUU_DETALLE.features, ...(detalle?.estados.features ?? [])].map((f) => ({ f, b: geoBounds(f) })),
+    [detalle],
+  );
   const reticula = useMemo(() => camino(geoGraticule10()) ?? "", [camino]);
   const regionesEeuu = useMemo(() => GEO_REGIONES_EEUU.map((r) => ({ ...r, d: camino(r.geo) ?? "" })), [camino]);
   const regionesMexico = useMemo(
@@ -1972,6 +2047,41 @@ function MapaSvg({
     </text>
   );
 
+  // Nombres en pantalla: primero los países (todos los que quepan), luego los estados en el espacio que sobra.
+  const ocupado: { x: number; y: number; ancho: number }[] = [];
+  const nombresPaises = porContinentes
+    ? []
+    : NOMBRES_PAISES.filter(([id, , , , minK]) => ke >= minK && id !== ID_FRANCIA && !((id === ID_MEXICO || id === ID_EEUU) && ke >= 1.8))
+        .map(([id, nombre, lon, lat]) => ({ id, nombre, s: aPantalla(lon, lat) }))
+        .filter((x): x is { id: string; nombre: string; s: { x: number; y: number } } => visible(x.s))
+        .filter(sinEncimar((x) => ({ ...x.s, ancho: x.nombre.length * (k >= 3 ? 4.6 : 4.1) + 8 }), ocupado));
+  const nombresEstados =
+    porContinentes || !detalle || ke < ZOOM_NOMBRES_ESTADOS
+      ? []
+      : [...ESTADOS_EEUU_DETALLE.features, ...detalle.estados.features]
+          .map((f) => ({ f, s: aPantalla(f.properties.lon, f.properties.lat) }))
+          .filter((x): x is { f: Feature<Geometry, PropsEstado>; s: { x: number; y: number } } => visible(x.s, 0))
+          .filter(sinEncimar((x) => ({ ...x.s, ancho: (x.f.properties.name?.length ?? 0) * 3.6 + 10 }), ocupado))
+          .slice(0, 50);
+
+  // "Estás en": país (y estado al acercar más) que queda al centro de la pantalla, para no perderse entre estados.
+  const centro = porContinentes ? null : proy.invert?.([(tam.w / 2 - vista.x) / k, (tam.h / 2 - vista.y) / k]);
+  const claveCentro = centro ? `${centro[0].toFixed(1)},${centro[1].toFixed(1)},${ke >= ZOOM_ESTADOS}` : "";
+  const ubicacion = useMemo(() => {
+    if (!centro) return null;
+    const [lng, lat] = centro;
+    const pais = (detalle?.paises ?? MUNDO).features.find((f) => geoContains(f, [lng, lat]));
+    if (!pais) return null;
+    const nombre = NOMBRES_PAISES.find((n) => n[0] === String(pais.id))?.[1] ?? pais.properties?.name ?? "";
+    let estado = "";
+    if (ke >= ZOOM_ESTADOS) {
+      const dentro = (b: [[number, number], [number, number]]) => lat >= b[0][1] && lat <= b[1][1] && (b[0][0] <= b[1][0] ? lng >= b[0][0] && lng <= b[1][0] : lng >= b[0][0] || lng <= b[1][0]);
+      estado = cajasEstados.find(({ f, b }) => dentro(b) && geoContains(f, [lng, lat]))?.f.properties.name ?? "";
+    }
+    return { pais: nombre, estado };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claveCentro, detalle, cajasEstados]);
+
   const francia = aPantalla(2.4, 46.9);
   const [ficha, setFicha] = useState<string | null>(null);
   const cerrarFicha = useCallback(() => setFicha(null), []);
@@ -2124,24 +2234,14 @@ function MapaSvg({
             })}
 
           {/* Nombres de estados y provincias (zoom alto), solo los que caen en pantalla */}
-          {!porContinentes &&
-            detalle &&
-            ke >= ZOOM_NOMBRES_ESTADOS &&
-            [...ESTADOS_EEUU_DETALLE.features, ...detalle.estados.features]
-              .map((f) => ({ f, s: aPantalla(f.properties.lon, f.properties.lat) }))
-              .filter((x): x is { f: Feature<Geometry, PropsEstado>; s: { x: number; y: number } } => visible(x.s, 0))
-              .filter(sinEncimar((x) => ({ ...x.s, ancho: (x.f.properties.name?.length ?? 0) * 3.6 + 10 })))
-              .slice(0, 50)
-              .map(({ f, s }, i) => <g key={`${f.properties.iso_a2}-${f.properties.name}-${i}`}>{etiqueta(f.properties.name, s, "region")}</g>)}
+          {nombresEstados.map(({ f, s }, i) => (
+            <g key={`${f.properties.iso_a2}-${f.properties.name}-${i}`}>{etiqueta(f.properties.name, s, "region")}</g>
+          ))}
 
           {/* Nombres de países y regiones */}
-          {!porContinentes && NOMBRES_PAISES.map(([id, nombre, lon, lat, minK]) => {
-            if (ke < minK) return null;
-            if ((id === ID_MEXICO || id === ID_EEUU) && ke >= 1.8) return null;
-            if (id === ID_FRANCIA) return null;
-            const s = aPantalla(lon, lat);
-            return visible(s) ? etiqueta(nombre, s, "pais") : null;
-          })}
+          {nombresPaises.map(({ id, nombre, s }) => (
+            <g key={id}>{etiqueta(nombre, s, "pais")}</g>
+          ))}
           {!porContinentes &&
             ke >= 1.8 &&
             REGIONES_EEUU.map((r) => {
@@ -2226,6 +2326,20 @@ function MapaSvg({
             })()}
         </svg>
       )}
+      <AnimatePresence>
+        {ubicacion && !modoPin && (
+          <motion.p
+            key="ubicacion"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="pointer-events-none absolute inset-x-0 top-[5.5rem] z-10 mx-auto w-max max-w-[70%] truncate rounded-full border-2 border-noche bg-oro px-3 py-1 text-center text-xs font-extrabold text-noche shadow-comic"
+          >
+            📍 {ubicacion.pais}
+            {ubicacion.estado && <span className="font-bold"> · {ubicacion.estado}</span>}
+          </motion.p>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {porContinentes && !modoPin && tam.w > 0 && (
           <motion.p
