@@ -1367,7 +1367,10 @@ function cargarDetalleMapa() {
       const te = e as Topology<{ adm1: GeometryCollection<PropsEstado> }>;
       return {
         paises: feature(tp, tp.objects.countries) as FeatureCollection<Geometry, { name: string }>,
-        estados: feature(te, te.objects.adm1) as FeatureCollection<Geometry, PropsEstado>,
+        // Algunos estados de Natural Earth vienen sin nombre: se quedan las líneas pero no se nombran ni se encuadran.
+        estados: ((e) => ({ ...e, features: e.features.filter((f) => f.properties?.name && Number.isFinite(f.properties.lat)) }))(
+          feature(te, te.objects.adm1) as FeatureCollection<Geometry, PropsEstado>,
+        ),
         bordesEstados: mesh(te, te.objects.adm1, (a, b) => a !== b),
       };
     } catch {
@@ -2127,7 +2130,7 @@ function MapaSvg({
             [...ESTADOS_EEUU_DETALLE.features, ...detalle.estados.features]
               .map((f) => ({ f, s: aPantalla(f.properties.lon, f.properties.lat) }))
               .filter((x): x is { f: Feature<Geometry, PropsEstado>; s: { x: number; y: number } } => visible(x.s, 0))
-              .filter(sinEncimar((x) => ({ ...x.s, ancho: x.f.properties.name.length * 3.6 + 10 })))
+              .filter(sinEncimar((x) => ({ ...x.s, ancho: (x.f.properties.name?.length ?? 0) * 3.6 + 10 })))
               .slice(0, 50)
               .map(({ f, s }, i) => <g key={`${f.properties.iso_a2}-${f.properties.name}-${i}`}>{etiqueta(f.properties.name, s, "region")}</g>)}
 
