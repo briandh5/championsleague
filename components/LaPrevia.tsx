@@ -1958,7 +1958,12 @@ function MapaSvg({
     const [lng, lat] = coords;
     const vuelta = proy([lng, lat]);
     if (!vuelta || Math.hypot(vuelta[0] - (p.x - v.x) / v.k, vuelta[1] - (p.y - v.y) / v.k) > 1) return; // fuera del globo
-    if (modoPin) return onElegir(lat, lng);
+    // Poniendo pin: el pin está fijo al centro; tocar un lugar lo trae al centro (sin cambiar el zoom).
+    if (modoPin) {
+      const q = proy([lng, lat]);
+      if (q) irA({ k: v.k, x: tam.w / 2 - q[0] * v.k, y: tam.h / 2 - q[1] * v.k });
+      return;
+    }
     // Vista por continentes: tocar uno acerca el mapa a esa zona.
     const escala = Math.min(1, Math.max(tam.w, 1) / 820);
     if (v.k * escala >= ZOOM_PAISES) {
@@ -2065,8 +2070,8 @@ function MapaSvg({
           .slice(0, 50);
 
   // "Estás en": país (y estado al acercar más) que queda al centro de la pantalla, para no perderse entre estados.
-  const centro = porContinentes ? null : proy.invert?.([(tam.w / 2 - vista.x) / k, (tam.h / 2 - vista.y) / k]);
-  const claveCentro = centro ? `${centro[0].toFixed(1)},${centro[1].toFixed(1)},${ke >= ZOOM_ESTADOS}` : "";
+  const centro = porContinentes && !modoPin ? null : proy.invert?.([(tam.w / 2 - vista.x) / k, (tam.h / 2 - vista.y) / k]);
+  const claveCentro = centro ? `${centro[0].toFixed(2)},${centro[1].toFixed(2)},${ke >= ZOOM_ESTADOS || modoPin}` : "";
   const ubicacion = useMemo(() => {
     if (!centro) return null;
     const [lng, lat] = centro;
@@ -2074,7 +2079,7 @@ function MapaSvg({
     if (!pais) return null;
     const nombre = NOMBRES_PAISES.find((n) => n[0] === String(pais.id))?.[1] ?? pais.properties?.name ?? "";
     let estado = "";
-    if (ke >= ZOOM_ESTADOS) {
+    if (ke >= ZOOM_ESTADOS || modoPin) {
       const dentro = (b: [[number, number], [number, number]]) => lat >= b[0][1] && lat <= b[1][1] && (b[0][0] <= b[1][0] ? lng >= b[0][0] && lng <= b[1][0] : lng >= b[0][0] || lng <= b[1][0]);
       estado = cajasEstados.find(({ f, b }) => dentro(b) && geoContains(f, [lng, lat]))?.f.properties.name ?? "";
     }
@@ -2326,14 +2331,33 @@ function MapaSvg({
             })()}
         </svg>
       )}
+      {/* Poniendo pin: pin fijo al centro y botón para clavarlo justo ahí */}
+      {modoPin && tam.w > 0 && (
+        <>
+          <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-full" aria-hidden>
+            <motion.svg width="44" height="56" viewBox="0 0 44 56" initial={{ y: -14 }} animate={{ y: 0 }} transition={{ type: "spring", stiffness: 380, damping: 14 }}>
+              <path d="M22 54C22 54 40 33 40 20A18 18 0 0 0 4 20C4 33 22 54 22 54Z" fill="#ff3b6b" stroke="#0b0e28" strokeWidth="3" strokeLinejoin="round" />
+              <circle cx="22" cy="20" r="7" fill="#fff" stroke="#0b0e28" strokeWidth="2.5" />
+            </motion.svg>
+          </div>
+          <span className="pointer-events-none absolute left-1/2 top-1/2 z-10 h-2 w-4 -translate-x-1/2 -translate-y-1/2 rounded-[50%] bg-noche/40" aria-hidden />
+          <button
+            onClick={() => centro && onElegir(centro[1], centro[0])}
+            disabled={!centro}
+            className="absolute bottom-[8.5rem] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-2xl border-2 border-noche bg-neon px-5 py-3 font-display text-lg font-extrabold uppercase tracking-wide text-noche shadow-comic active:translate-y-0.5 disabled:opacity-50 lg:bottom-6"
+          >
+            📍 Clavar aquí
+          </button>
+        </>
+      )}
       <AnimatePresence>
-        {ubicacion && !modoPin && (
+        {ubicacion && (
           <motion.p
             key="ubicacion"
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="pointer-events-none absolute inset-x-0 top-[5.5rem] z-10 mx-auto w-max max-w-[70%] truncate rounded-full border-2 border-noche bg-oro px-3 py-1 text-center text-xs font-extrabold text-noche shadow-comic"
+            className={`pointer-events-none absolute inset-x-0 ${modoPin ? "top-[10.25rem]" : "top-[5.5rem]"} z-10 mx-auto w-max max-w-[70%] truncate rounded-full border-2 border-noche bg-oro px-3 py-1 text-center text-xs font-extrabold text-noche shadow-comic`}
           >
             📍 {ubicacion.pais}
             {ubicacion.estado && <span className="font-bold"> · {ubicacion.estado}</span>}
@@ -4627,7 +4651,7 @@ export default function LaPrevia() {
                 <motion.span animate={{ y: [0, -6, 0] }} transition={{ repeat: Infinity, duration: 1 }} className="text-2xl">
                   📍
                 </motion.span>
-                <p className="flex-1 text-sm font-extrabold leading-tight">Toca el dibujo donde se van a juntar. Acerca el mapa para mayor precisión.</p>
+                <p className="flex-1 text-sm font-extrabold leading-tight">Mueve el mapa (o toca el lugar) para dejar el pin justo donde se juntan y pulsa "Clavar aquí".</p>
                 <button onClick={() => setModoPin(false)} aria-label="Cancelar" className="rounded-lg p-1 hover:bg-noche/10">
                   <X className="h-5 w-5" />
                 </button>
