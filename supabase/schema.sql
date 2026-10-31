@@ -65,14 +65,21 @@ create policy "escribir" on public.mensajes for insert with check (
   sala = 'general' or exists (select 1 from public.planes p where p.id = sala)
 );
 
+-- Amigos invitados a cada plan (nombres) y si ya se les mandó el aviso al cel.
+alter table public.planes add column if not exists invitados text[] not null default '{}';
+alter table public.planes add column if not exists avisado boolean not null default false;
+
 -- Crear un pin con su llave y su anfitrión ya confirmado.
 create or replace function public.crear_plan(p jsonb, p_clave text)
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  insert into planes (id, partido_id, snap, lat, lng, pais, estado, ciudad, lugar, tipo, hashtag, anfitrion, creado)
+  insert into planes (id, partido_id, snap, lat, lng, pais, estado, ciudad, lugar, tipo, hashtag, anfitrion, creado, invitados)
   values (p->>'id', p->>'partido_id', p->'snap', (p->>'lat')::float8, (p->>'lng')::float8,
           p->>'pais', p->>'estado', p->>'ciudad', p->>'lugar', p->>'tipo', p->>'hashtag', p->>'anfitrion',
-          coalesce((p->>'creado')::timestamptz, now()));
+          coalesce((p->>'creado')::timestamptz, now()),
+          coalesce((select array_agg(distinct left(x, 40)) from (
+            select jsonb_array_elements_text(p->'invitados') x
+            where jsonb_typeof(p->'invitados') = 'array' limit 40) t where x <> ''), '{}'));
   insert into planes_claves (plan_id, clave) values (p->>'id', p_clave);
   insert into confirmados (plan_id, nombre) values (p->>'id', p->>'anfitrion') on conflict do nothing;
 end $$;
@@ -174,3 +181,79 @@ begin
     execute $p$create policy "subir fotos" on storage.objects for insert to anon, authenticated with check (bucket_id = 'fotos')$p$;
   end if;
 end $$;
+
+-- ───────── Amigos e invitaciones con aviso al cel (Web Push) ─────────
+-- Quien abre la página y pone su nombre queda en esta lista para que lo puedan invitar.
+create table if not exists public.amigos (
+  nombre     text primary key check (char_length(nombre) between 1 and 40),
+  visto      timestamptz not null default now(),
+  con_avisos boolean not null default false
+);
+alter table public.amigos enable row level security;
+drop policy if exists "ver amigos" on public.amigos;
+create policy "ver amigos" on public.amigos for select using (true);
+
+-- Suscripciones push de cada cel. Nadie las puede leer desde la app.
+create table if not exists public.suscripciones (
+  endpoint text primary key check (char_length(endpoint) <= 1000),
+  nombre   text not null check (char_length(nombre) between 1 and 40),
+  sub      jsonb not null,
+  creado   timestamptz not null default now()
+);
+create index if not exists suscripciones_nombre on public.suscripciones (nombre);
+alter table public.suscripciones enable row level security;
+
+create or replace function public.registrar_amigo(p_nombre text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if char_length(coalesce(trim(p_nombre), '')) between 1 and 40 then
+    insert into amigos (nombre) values (trim(p_nombre))
+    on conflict (nombre) do update set visto = now();
+  end if;
+end $$;
+
+create or replace function public.guardar_suscripcion(p_nombre text, p_sub jsonb)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_nombre text := trim(p_nombre);
+begin
+  if char_length(coalesce(v_nombre, '')) not between 1 and 40 or coalesce(p_sub->>'endpoint', '') !~ '^https://' then
+    raise exception 'suscripción inválida';
+  end if;
+  insert into suscripciones (endpoint, nombre, sub) values (p_sub->>'endpoint', v_nombre, p_sub)
+  on conflict (endpoint) do update set nombre = excluded.nombre, sub = excluded.sub, creado = now();
+  insert into amigos (nombre, con_avisos) values (v_nombre, true)
+  on conflict (nombre) do update set con_avisos = true, visto = now();
+end $$;
+
+create or replace function public.borrar_suscripcion(p_endpoint text)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_nombre text;
+begin
+  delete from suscripciones where endpoint = p_endpoint returning nombre into v_nombre;
+  if v_nombre is not null and not exists (select 1 from suscripciones where nombre = v_nombre) then
+    update amigos set con_avisos = false where nombre = v_nombre;
+  end if;
+end $$;
+
+-- Solo el cel que creó el plan (con su llave) puede pedir los avisos, una sola vez por plan.
+create or replace function public.suscripciones_para_plan(p_plan text, p_clave text)
+returns table (endpoint text, sub jsonb) language plpgsql security definer set search_path = public as $$
+begin
+  update planes set avisado = true
+  where id = p_plan and not avisado
+    and exists (select 1 from planes_claves k where k.plan_id = p_plan and k.clave = p_clave);
+  if not found then return; end if;
+  return query
+    select s.endpoint, s.sub from suscripciones s
+    join planes pl on pl.id = p_plan
+    where s.nombre = any (pl.invitados) and s.nombre <> pl.anfitrion;
+end $$;
+
+revoke all on function public.registrar_amigo(text) from public;
+revoke all on function public.guardar_suscripcion(text, jsonb) from public;
+revoke all on function public.borrar_suscripcion(text) from public;
+revoke all on function public.suscripciones_para_plan(text, text) from public;
+grant execute on function public.registrar_amigo(text) to anon, authenticated;
+grant execute on function public.guardar_suscripcion(text, jsonb) to anon, authenticated;
+grant execute on function public.borrar_suscripcion(text) to anon, authenticated;
+grant execute on function public.suscripciones_para_plan(text, text) to anon, authenticated;

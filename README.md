@@ -19,6 +19,7 @@ Framer Motion · Lucide · Supabase (Postgres + Realtime). Toda la interfaz vive
 | Buscador flotante | Filtra los pines por hashtag, nombre de amigo, lugar o ciudad. Muestra los hashtags más populares. |
 | Calendario | Abre en el día de hoy si hay partidos. Resultados reales con goleadores (minuto, penal o autogol) bajo cada marcador. Fases (Fase de liga, Play-off, Octavos, Cuartos, Semifinal, Final), tira de días y tarjetas con escudos, estado **En vivo** con marcador y minuto o **Próximamente** con hora local. |
 | Recordatorios | 1 día y 1 hora antes, configurables por plan. Aviso dentro de la app y notificación del navegador. El botón **.ics** descarga el evento con las dos alarmas para que lleguen aunque la app esté cerrada. |
+| Invitar amigos | Al crear un plan aparece **Invitar amigos** con los nombres de quienes ya abrieron la página y pusieron su nombre (con Supabase). Los que activaron los avisos (campana del encabezado) llevan 🔔 y les llega una notificación al cel aunque tengan la página cerrada (Web Push con service worker, en Chrome de Android y escritorio; en iPhone solo si agregan la app a la pantalla de inicio). Al tocarla se abre el plan. Los demás ven la invitación en el centro de avisos al abrir la página. Solo el cel que creó el plan puede mandar el aviso, una vez. |
 | Compartir plan | Enlace dinámico con el mensaje "¿Qué plan para Equipo A vs Equipo B?". Quien lo abre ve el pin y puede apuntarse. WhatsApp, Telegram, X o copiar. En celular usa el menú nativo de compartir. |
 | Google Calendar | Botón que abre el evento con fecha, hora, lugar y lista de amigos ya llenos. |
 | Confirmados y chat | "¡Me apunto!", chat rápido por plan y botón para borrar el plan (solo desde el dispositivo que lo creó). El mapa arranca vacío: solo aparecen los planes que alguien agrega. |
@@ -66,4 +67,7 @@ npm run dev
    3. En **Project Settings → API** copia la *Project URL* y la llave *anon public*.
    4. En Vercel → **Settings → Environment Variables** agrega `NEXT_PUBLIC_SUPABASE_URL` y
       `NEXT_PUBLIC_SUPABASE_ANON_KEY` con esos valores y vuelve a desplegar (**Redeploy**).
+4. Para los avisos al cel de las invitaciones: agrega también `VAPID_PRIVATE_KEY` (la llave privada
+   que va con la pública de `lib/push.ts`; se crea con `npx web-push generate-vapid-keys`). Si cambias el par,
+   pon la pública en `NEXT_PUBLIC_VAPID_PUBLIC_KEY`. Sin esa variable, las invitaciones igual salen en la app.
 

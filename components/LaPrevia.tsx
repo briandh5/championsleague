@@ -30,6 +30,7 @@ import {
 import type { GeometryCollection, Topology } from "topojson-specification";
 import type { Feature, FeatureCollection, Geometry, MultiLineString } from "geojson";
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
+import { mostrarAviso, pushSoportado, registrarSW, suscribirCel } from "@/lib/push";
 import mundoTopo from "world-atlas/countries-110m.json";
 import eeuuTopo from "us-atlas/states-10m.json";
 import {
@@ -140,9 +141,16 @@ interface Plan {
   hashtag: string;
   anfitrion: string;
   confirmados: string[];
+  /** Amigos (por nombre) a los que el anfitrión invitó al crear el plan. */
+  invitados?: string[];
   chat: Mensaje[];
   recordatorios: { dia: boolean; hora: boolean };
   creado: string;
+}
+
+interface Amigo {
+  nombre: string;
+  conAvisos: boolean;
 }
 
 type Vista = "mapa" | "partidos" | "planes" | "chat" | "stats";
@@ -2789,6 +2797,7 @@ function FormularioPin({
   partidoInicial,
   hashtagsUsados,
   yo,
+  amigos,
   onGuardar,
   onCerrar,
 }: {
@@ -2797,6 +2806,7 @@ function FormularioPin({
   partidoInicial: string | null;
   hashtagsUsados: string[];
   yo: string;
+  amigos: Amigo[] | null;
   onGuardar: (pl: Plan) => void;
   onCerrar: () => void;
 }) {
@@ -2829,6 +2839,11 @@ function FormularioPin({
   const [hashtag, setHashtag] = useState("#");
   const [tocadoTag, setTocadoTag] = useState(false);
   const [anfitrion, setAnfitrion] = useState(yo);
+  const [elegidos, setElegidos] = useState<string[]>([]);
+  const [filtroAmigos, setFiltroAmigos] = useState("");
+  const candidatos = (amigos ?? []).filter((a) => a.nombre !== anfitrion.trim());
+  const visibles = candidatos.filter((a) => elegidos.includes(a.nombre) || a.nombre.toLowerCase().includes(filtroAmigos.trim().toLowerCase()));
+  const alternarAmigo = (n: string) => setElegidos((xs) => (xs.includes(n) ? xs.filter((x) => x !== n) : [...xs, n]));
   useEffect(() => {
     if (!tocadoTag && ciudad) setHashtag(sugerirHashtag(ciudad, hashtagsUsados));
   }, [ciudad, tocadoTag, hashtagsUsados]);
@@ -2855,6 +2870,7 @@ function FormularioPin({
       hashtag,
       anfitrion: anfitrion.trim(),
       confirmados: [anfitrion.trim()],
+      invitados: elegidos.filter((n) => n !== anfitrion.trim()),
       chat: [],
       recordatorios: { dia: true, hora: true },
       creado: new Date().toISOString(),
@@ -2952,6 +2968,51 @@ function FormularioPin({
         <Campo etiqueta="Anfitrión">
           <input value={anfitrion} onChange={(e) => setAnfitrion(e.target.value)} className={claseInput} placeholder="Tu nombre" />
         </Campo>
+
+        {amigos && (
+          <div>
+            <span className="mb-1.5 flex items-center justify-between text-xs font-bold uppercase tracking-wider text-white/60">
+              Invitar amigos
+              {elegidos.length > 0 && <span className="normal-case tracking-normal text-oro">{elegidos.length} invitado{elegidos.length > 1 ? "s" : ""}</span>}
+            </span>
+            {candidatos.length === 0 ? (
+              <p className="rounded-xl bg-white/[.04] px-3 py-2.5 text-xs text-white/55">
+                Aquí aparecerán tus amigos cuando abran la página y pongan su nombre. Mientras, comparte el pin con el enlace.
+              </p>
+            ) : (
+              <>
+                {candidatos.length > 10 && (
+                  <input value={filtroAmigos} onChange={(e) => setFiltroAmigos(e.target.value)} className={`${claseInput} mb-2 py-2`} placeholder="Buscar amigo…" />
+                )}
+                <div className="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto">
+                  {visibles.map((a) => {
+                    const on = elegidos.includes(a.nombre);
+                    return (
+                      <motion.button
+                        key={a.nombre}
+                        type="button"
+                        whileTap={{ scale: 0.92 }}
+                        onClick={() => alternarAmigo(a.nombre)}
+                        aria-pressed={on}
+                        className={`inline-flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 text-xs font-bold transition ${
+                          on ? "border-oro bg-oro/15 text-oro" : "border-white/10 bg-white/[.05] text-white/80"
+                        }`}
+                      >
+                        <span className="grid h-5 w-5 place-items-center rounded-full bg-noche-600 text-[10px] font-extrabold">{on ? <Check className="h-3 w-3" /> : a.nombre[0]?.toUpperCase()}</span>
+                        {a.nombre}
+                        {a.conAvisos && <BellRing className="h-3 w-3 text-neon" aria-label="recibe avisos en su cel" />}
+                      </motion.button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-xs text-white/50">
+                  <BellRing className="mr-1 inline h-3 w-3 text-neon" />
+                  les llega el aviso al cel. A los demás les sale la invitación al abrir la página.
+                </p>
+              </>
+            )}
+          </div>
+        )}
 
         <Boton tipo="submit" tono="neon" className="w-full py-3 text-base" disabled={!listo}>
           <MapPin className="h-5 w-5" /> Clavar pin
@@ -3134,6 +3195,11 @@ function DetallePlan({
               ))}
             </AnimatePresence>
           </div>
+          {!!plan.invitados?.filter((n) => !plan.confirmados.includes(n)).length && (
+            <p className="mt-2 text-xs text-white/50">
+              Invitados que no han confirmado: {plan.invitados.filter((n) => !plan.confirmados.includes(n)).join(", ")}
+            </p>
+          )}
         </div>
 
         {/* Chat */}
@@ -3336,6 +3402,7 @@ interface FilaPlan {
   tipo: TipoLugar;
   hashtag: string;
   anfitrion: string;
+  invitados?: string[] | null;
   creado: string;
 }
 interface FilaMensaje {
@@ -3397,6 +3464,7 @@ async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[];
     tipo: f.tipo,
     hashtag: f.hashtag,
     anfitrion: f.anfitrion,
+    invitados: f.invitados ?? [],
     confirmados: ((co.data ?? []) as { plan_id: string; nombre: string }[]).filter((c) => c.plan_id === f.id).map((c) => c.nombre),
     chat: mensajes.filter((m) => m.sala === f.id).map(aMensaje),
     recordatorios: recordatorios[f.id] ?? { dia: true, hora: true },
@@ -3447,7 +3515,9 @@ interface EventoPersonal {
   lugar: string;
 }
 
-const esParticipante = (pl: Plan, yo: string, invitaciones: string[]) => invitaciones.includes(pl.id) || (!!yo && (pl.anfitrion === yo || pl.confirmados.includes(yo)));
+const meInvitaron = (pl: Plan, yo: string, invitaciones: string[]) => invitaciones.includes(pl.id) || (!!yo && pl.anfitrion !== yo && !!pl.invitados?.includes(yo));
+const esParticipante = (pl: Plan, yo: string, invitaciones: string[]) =>
+  meInvitaron(pl, yo, invitaciones) || (!!yo && (pl.anfitrion === yo || pl.confirmados.includes(yo)));
 const msMensaje = (m: Mensaje) => Date.parse(m.hora) || 0;
 
 function CentroPersonal({
@@ -4053,6 +4123,8 @@ export default function LaPrevia() {
   const [invitaciones, setInvitaciones] = useState<string[]>([]);
   const [vistos, setVistos] = useState<Record<string, string>>({});
   const [enLinea, setEnLinea] = useState<string[]>([]);
+  const [amigos, setAmigos] = useState<Amigo[]>([]);
+  const abrirPendiente = useRef<string | null>(null);
   const listo = useRef(false);
   // En modo nube: recordatorios y llaves para borrar viven solo en este dispositivo.
   const recordatoriosRef = useRef<Recordatorios>({});
@@ -4106,12 +4178,15 @@ export default function LaPrevia() {
         /* enlace dañado: se ignora */
       }
     }
+    // Al tocar el aviso de invitación en el cel se abre ese plan.
+    const abrirId = params.get("abrir");
+    if (abrirId) abrirPendiente.current = abrirId.slice(0, 80);
     const partidoCompartido = params.get("partido");
     if (partidoCompartido) {
       setFocoPartido(partidoCompartido);
       setVista("partidos");
     }
-    if (compartido || partidoCompartido) window.history.replaceState(null, "", window.location.pathname + (params.get("demo") ? "?demo=vivo" : ""));
+    if (compartido || partidoCompartido || abrirId) window.history.replaceState(null, "", window.location.pathname + (params.get("demo") ? "?demo=vivo" : ""));
     setInvitaciones(invs);
     setPlanes(iniciales);
     listo.current = true;
@@ -4151,7 +4226,50 @@ export default function LaPrevia() {
     });
   }, [planes, abierto, yo, invitaciones]);
 
-  const invitados = useMemo(() => planes.filter((pl) => invitaciones.includes(pl.id) && !(yo && pl.confirmados.includes(yo))), [planes, invitaciones, yo]);
+  useEffect(() => {
+    const id = abrirPendiente.current;
+    const pl = id ? planes.find((x) => x.id === id) : undefined;
+    if (!pl) return;
+    abrirPendiente.current = null;
+    setAbierto(pl.id);
+    setFoco({ lat: pl.lat, lng: pl.lng, zoom: 5, n: Date.now() });
+  }, [planes]);
+
+  // Amigos: quien abre la página y pone su nombre queda en la lista para que lo inviten.
+  const cargarAmigos = useCallback(async () => {
+    if (!NUBE) return;
+    const { data, error } = await NUBE.from("amigos").select("nombre, con_avisos").order("visto", { ascending: false }).limit(300);
+    if (!error && data) setAmigos((data as { nombre: string; con_avisos: boolean }[]).map((a) => ({ nombre: a.nombre, conAvisos: a.con_avisos })));
+  }, []);
+  useEffect(() => {
+    cargarAmigos();
+  }, [cargarAmigos]);
+  useEffect(() => {
+    if (borrador) cargarAmigos();
+  }, [borrador, cargarAmigos]);
+  const amigosParaInvitar = useMemo(() => {
+    const vistos = new Set(amigos.map((a) => a.nombre));
+    const extra = enLinea.filter((n) => n && n !== "Anónimo" && !vistos.has(n)).map((nombre) => ({ nombre, conAvisos: false }));
+    return [...amigos, ...extra].filter((a) => a.nombre !== yo).sort((a, b) => Number(b.conAvisos) - Number(a.conAvisos) || a.nombre.localeCompare(b.nombre, "es"));
+  }, [amigos, enLinea, yo]);
+
+  // Con nombre: queda registrado como amigo y, si ya dio permiso de avisos, su cel se suscribe para recibir invitaciones.
+  useEffect(() => {
+    if (!NUBE || !yo) return;
+    const nube = NUBE;
+    nube.rpc("registrar_amigo", { p_nombre: yo }).then(
+      () => {},
+      () => {},
+    );
+    if (pushSoportado() && Notification.permission === "granted") {
+      suscribirCel().then((sub) => sub && nube.rpc("guardar_suscripcion", { p_nombre: yo, p_sub: sub }).then(
+        () => {},
+        () => {},
+      ));
+    } else registrarSW();
+  }, [yo]);
+
+  const invitados = useMemo(() => planes.filter((pl) => meInvitaron(pl, yo, invitaciones) && !(yo && pl.confirmados.includes(yo))), [planes, invitaciones, yo]);
   const conChat = useMemo(
     () =>
       planes
@@ -4270,7 +4388,7 @@ export default function LaPrevia() {
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
       for (const { pl, cuando, clave } of pendientes) {
         try {
-          new Notification(`${cuando}: ${pl.snap.local} vs ${pl.snap.visita}`, { body: `${pl.lugar}, ${pl.ciudad} ${pl.hashtag}`, icon: "/icon.svg", tag: clave });
+          mostrarAviso(`${cuando}: ${pl.snap.local} vs ${pl.snap.visita}`, { body: `${pl.lugar}, ${pl.ciudad} ${pl.hashtag}`, icon: "/icono-192.png", tag: clave });
         } catch {
           /* algunos móviles solo permiten avisos desde un service worker */
         }
@@ -4278,11 +4396,24 @@ export default function LaPrevia() {
     }
   }, [ahora, planes, partidosPorId, avisar]);
 
-  const pedirPermiso = async () => {
+  const activarAvisos = async (nombre: string) => {
     if (typeof Notification === "undefined") return;
     const r = await Notification.requestPermission();
     setPermiso(r);
-    avisar(r === "granted" ? { titulo: "Avisos activados", texto: "Te avisaremos 1 día y 1 hora antes.", tono: "neon" } : { titulo: "Avisos bloqueados", texto: "Puedes activarlos en los ajustes del navegador." });
+    if (r !== "granted") return avisar({ titulo: "Avisos bloqueados", texto: "Puedes activarlos en los ajustes del navegador." });
+    const sub = NUBE && nombre ? await suscribirCel() : null;
+    const ok = !!sub && !!NUBE && !(await NUBE.rpc("guardar_suscripcion", { p_nombre: nombre, p_sub: sub })).error;
+    if (ok) cargarAmigos();
+    avisar({
+      titulo: "Avisos activados",
+      texto: ok ? "Te llegarán las invitaciones de tus amigos al cel, y recordatorios 1 día y 1 hora antes." : "Te avisaremos 1 día y 1 hora antes.",
+      tono: "neon",
+    });
+  };
+  const pedirPermiso = () => {
+    if (typeof Notification === "undefined") return;
+    if (NUBE && pushSoportado()) conNombre((n) => void activarAvisos(n));
+    else void activarAvisos(yo);
   };
 
   const conNombre = (luego: (n: string) => void) => {
@@ -4345,6 +4476,19 @@ export default function LaPrevia() {
         return;
       }
       guardar("previa:claves", { ...leer<Record<string, string>>("previa:claves", {}), [pl.id]: clave });
+      if (pl.invitados?.length) {
+        const n = pl.invitados.length;
+        fetch("/api/avisar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan: pl.id, clave }) })
+          .then((r) => r.json() as Promise<{ enviados?: number }>)
+          .then((d) =>
+            avisar({
+              titulo: d.enviados ? `Avisamos a ${d.enviados} amigo${d.enviados > 1 ? "s" : ""} en su cel` : `Invitaste a ${n} amigo${n > 1 ? "s" : ""}`,
+              texto: d.enviados && d.enviados < n ? "Los demás verán la invitación al abrir la página." : d.enviados ? "Les llegó la notificación." : "Les saldrá la invitación al abrir la página.",
+              tono: "neon",
+            }),
+          )
+          .catch(() => {});
+      }
     }
     setPlanes((xs) => [...xs, pl]);
     setBorrador(null);
@@ -4756,6 +4900,7 @@ export default function LaPrevia() {
             partidoInicial={partidoPin}
             hashtagsUsados={planes.map((p) => p.hashtag)}
             yo={yo}
+            amigos={NUBE ? amigosParaInvitar : null}
             onGuardar={guardarPin}
             onCerrar={() => setBorrador(null)}
           />
