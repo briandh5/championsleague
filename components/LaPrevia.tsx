@@ -469,6 +469,25 @@ const deBase64 = (s: string) => decodeURIComponent(escape(atob(s.replace(/-/g, "
 
 const fechaGoogle = (d: Date) => d.toISOString().replace(/[-:]|\.\d{3}/g, "");
 
+/* Enlaces cortos: /bayernVsBarcelona4noviembre para un partido y /ChampionsXalapa (su hashtag) para un plan. */
+const APODOS: Record<string, string> = {
+  bay: "Bayern", psg: "PSG", atm: "Atletico", mci: "ManCity", mun: "ManUnited", bvb: "Dortmund", rbl: "Leipzig", psv: "PSV",
+  sha: "Shakhtar", cbr: "Brujas", sla: "Slavia", aek: "AEK", slo: "Slovan", scp: "Sporting", bod: "Bodo", bet: "Betis", lask: "LASK",
+};
+const sinAcentos = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ø/g, "o").replace(/ı/g, "i").replace(/ş/g, "s");
+const apodo = (e: Equipo) => APODOS[e.id] ?? sinAcentos(e.nombre).split(/[^A-Za-z0-9]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+// La fecha va en hora de Madrid para que el enlace sea el mismo en cualquier país.
+const fechaEnlace = (iso: string) => {
+  const f = new Intl.DateTimeFormat("es", { day: "numeric", month: "long", timeZone: "Europe/Madrid" }).formatToParts(new Date(iso));
+  return (f.find((x) => x.type === "day")?.value ?? "") + sinAcentos(f.find((x) => x.type === "month")?.value ?? "");
+};
+function slugPartido(p: Partido) {
+  const a = apodo(p.local);
+  const inicio = a === a.toUpperCase() ? a.toLowerCase() : a[0].toLowerCase() + a.slice(1);
+  return inicio + "Vs" + apodo(p.visita) + fechaEnlace(p.inicio);
+}
+const ENLACE_CORTO = /^[A-Za-z0-9_]{3,80}$/;
+
 function enlaceGoogleCalendar(titulo: string, inicio: string, lugar: string, detalles: string) {
   const ini = new Date(inicio);
   const fin = new Date(ini.getTime() + 2 * 60 * 60 * 1000);
@@ -4125,6 +4144,7 @@ export default function LaPrevia() {
   const [enLinea, setEnLinea] = useState<string[]>([]);
   const [amigos, setAmigos] = useState<Amigo[]>([]);
   const abrirPendiente = useRef<string | null>(null);
+  const enlacePendiente = useRef<string | null>(null);
   const listo = useRef(false);
   // En modo nube: recordatorios y llaves para borrar viven solo en este dispositivo.
   const recordatoriosRef = useRef<Recordatorios>({});
@@ -4181,6 +4201,8 @@ export default function LaPrevia() {
     // Al tocar el aviso de invitación en el cel se abre ese plan.
     const abrirId = params.get("abrir");
     if (abrirId) abrirPendiente.current = abrirId.slice(0, 80);
+    const ruta = decodeURIComponent(window.location.pathname.slice(1)).replace(/\/$/, "");
+    if (ENLACE_CORTO.test(ruta)) enlacePendiente.current = ruta;
     const partidoCompartido = params.get("partido");
     if (partidoCompartido) {
       setFocoPartido(partidoCompartido);
@@ -4234,6 +4256,28 @@ export default function LaPrevia() {
     setAbierto(pl.id);
     setFoco({ lat: pl.lat, lng: pl.lng, zoom: 5, n: Date.now() });
   }, [planes]);
+
+  // Enlace corto: primero se busca un partido con ese nombre y si no, un plan con ese hashtag.
+  useEffect(() => {
+    const ruta = enlacePendiente.current;
+    if (!ruta) return;
+    const r = ruta.toLowerCase();
+    const p = partidos.find((x) => slugPartido(x).toLowerCase() === r);
+    const pl = p ? undefined : planes.find((x) => x.hashtag.slice(1).toLowerCase() === r);
+    if (!p && !pl) return;
+    enlacePendiente.current = null;
+    window.history.replaceState(null, "", "/" + window.location.search);
+    if (p) {
+      setFocoPartido(p.id);
+      setVista("partidos");
+      return;
+    }
+    if (!pl) return;
+    if (pl.anfitrion !== yo) setInvitaciones((xs) => (xs.includes(pl.id) ? xs : [...xs, pl.id]));
+    setAbierto(pl.id);
+    setFoco({ lat: pl.lat, lng: pl.lng, zoom: 5, n: Date.now() });
+    avisar({ titulo: `Te invitaron a ${pl.hashtag}`, texto: `${pl.snap.local} vs ${pl.snap.visita} en ${pl.lugar}`, tono: "oro" });
+  }, [partidos, planes, yo, avisar]);
 
   // Amigos: quien abre la página y pone su nombre queda en la lista para que lo inviten.
   const cargarAmigos = useCallback(async () => {
@@ -4630,12 +4674,15 @@ export default function LaPrevia() {
     const a = p?.local.nombre ?? pl.snap.local;
     const b = p?.visita.nombre ?? pl.snap.visita;
     const ligero = { ...pl, chat: [] };
-    const url = `${window.location.origin}/?plan=${aBase64(JSON.stringify(ligero))}`;
+    // Con la nube el plan ya está guardado y basta su hashtag; sin ella el enlace lleva el plan completo.
+    const url = NUBE ? `${window.location.origin}/${pl.hashtag.slice(1)}` : `${window.location.origin}/?plan=${aBase64(JSON.stringify(ligero))}`;
     compartirTexto(`¿Qué plan para ${a} vs ${b}? ⚽\n📍 ${pl.lugar}, ${pl.ciudad} · ${pl.hashtag}\n🕘 ${fmtDiaLargo(p?.inicio ?? pl.snap.inicio)}, ${fmtHora(p?.inicio ?? pl.snap.inicio)}`, url);
   };
 
   const compartirPartido = (p: Partido) => {
-    const url = `${window.location.origin}/?partido=${encodeURIComponent(p.id)}`;
+    const slug = slugPartido(p);
+    const unico = p.local.id !== "tbd" && p.visita.id !== "tbd" && partidos.filter((x) => slugPartido(x) === slug).length === 1;
+    const url = unico ? `${window.location.origin}/${slug}` : `${window.location.origin}/?partido=${encodeURIComponent(p.id)}`;
     compartirTexto(`¿Qué plan para ${p.local.nombre} vs ${p.visita.nombre}? ⚽\n🕘 ${fmtDiaLargo(p.inicio)}, ${fmtHora(p.inicio)}`, url);
   };
 
