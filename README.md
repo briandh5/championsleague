@@ -57,6 +57,20 @@ npm install
 npm run dev
 ```
 
+## Calidad
+
+```bash
+npm run typecheck   # TypeScript estricto
+npm test            # pruebas unitarias (Vitest)
+npm run build       # build de producción
+```
+
+La lógica que no depende de React vive en [`lib/dominio`](lib/dominio) y tiene pruebas:
+tabla de posiciones y desempates, estado y minuto del partido, conversión de hora de Madrid
+(comparada día por día con la zona `Europe/Madrid`), enlaces cortos, hashtags, Google Calendar,
+citas del chat y el emparejamiento de nombres de clubes con ESPN. GitHub Actions corre las tres
+revisiones en cada pull request ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
 ## Publicar en Vercel
 
 1. Sube este proyecto a un repo vacío de GitHub.

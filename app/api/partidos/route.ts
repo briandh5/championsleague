@@ -1,4 +1,4 @@
-import type { Fase, Gol, Partido } from "@/components/LaPrevia";
+import type { Fase, Gol, Partido } from "@/lib/dominio/tipos";
 
 /**
  * Resultados reales de la Champions: marcador, minuto y goleadores.
