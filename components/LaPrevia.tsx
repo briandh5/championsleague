@@ -31,6 +31,22 @@ import type { GeometryCollection, Topology } from "topojson-specification";
 import type { Feature, FeatureCollection, Geometry, MultiLineString } from "geojson";
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import { mostrarAviso, pushSoportado, registrarSW, suscribirCel } from "@/lib/push";
+import type { Equipo, Fase, FilaTabla, Gol, Partido, Respuesta } from "@/lib/dominio/tipos";
+import { claveDia, conEstado, faltan, hash, horaMadrid } from "@/lib/dominio/tiempo";
+import { mismoEquipo } from "@/lib/dominio/equipos";
+import {
+  aBase64,
+  deBase64,
+  ENLACE_CORTO,
+  enlaceGoogleCalendar,
+  fechaGoogle,
+  HASHTAG_OK,
+  limpiarHashtag,
+  slugPartido,
+  sugerirHashtag,
+} from "@/lib/dominio/enlaces";
+import { calcularTabla, zonaTabla } from "@/lib/dominio/tabla";
+import { citaEnTexto, leerCitaEnTexto, quitarCitaDeTexto } from "@/lib/dominio/citas";
 import mundoTopo from "world-atlas/countries-110m.json";
 import eeuuTopo from "us-atlas/states-10m.json";
 import {
@@ -71,50 +87,11 @@ import {
 
 /* ────────────────────────────── Tipos ────────────────────────────── */
 
-export type Fase = "Fase de liga" | "Play-off" | "Octavos" | "Cuartos" | "Semifinal" | "Final";
+export type { Equipo, Fase, Gol, Partido } from "@/lib/dominio/tipos";
 
-export interface Equipo {
-  id: string;
-  nombre: string;
-  corto: string;
-  pais: string;
-  escudo?: string;
-  colores: [string, string];
-  estadio: string;
-  ciudad: string;
-}
-
-export interface Partido {
-  id: string;
-  fase: Fase;
-  jornada?: string;
-  inicio: string; // ISO en UTC
-  local: Equipo;
-  visita: Equipo;
-  estadio: string;
-  ciudad: string;
-  estado: "programado" | "vivo" | "final";
-  golesLocal?: number;
-  golesVisita?: number;
-  minuto?: string;
-  goles?: Gol[];
-}
-
-/** Gol con minuto y autor; `lado` dice si lo anotó el local (L) o la visita (V). */
-export interface Gol {
-  min: string;
-  jugador: string;
-  lado: "L" | "V";
-  tipo?: "penal" | "propia";
-}
 
 type TipoLugar = "bar" | "restaurante" | "casa";
 
-/** Mensaje al que se contesta (se guarda una copia corta para mostrarla citada). */
-interface Respuesta {
-  autor: string;
-  texto: string;
-}
 
 interface Mensaje {
   id: string;
@@ -229,13 +206,6 @@ const POR_DEFINIR: Equipo = {
   ciudad: "",
 };
 
-/** Hora de Madrid (CET/CEST) a ISO UTC. */
-function horaMadrid(fecha: string, hora: string): string {
-  const [y, m, d] = fecha.split("-").map(Number);
-  const [hh, mm] = hora.split(":").map(Number);
-  const verano = (y === 2026 && (m < 10 || (m === 10 && d < 25))) || (y === 2027 && (m > 3 || (m === 3 && d >= 28)));
-  return new Date(Date.UTC(y, m - 1, d, hh - (verano ? 2 : 1), mm)).toISOString();
-}
 
 /**
  * Fase de liga 2026/27 tal como la publica uefa.com (horario de Madrid).
@@ -371,55 +341,6 @@ function calendarioOficial(): Partido[] {
   return partidos.sort((a, b) => a.inicio.localeCompare(b.inicio) || a.id.localeCompare(b.id));
 }
 
-function hash(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-/**
- * Estado del partido según la hora: programado, en juego (con minuto) o terminado.
- * El marcador sale del resultado oficial o de la fuente en vivo; solo en modo demo se simula.
- */
-function conEstado(p: Partido, ahora: number, demo: boolean): Partido {
-  if (p.estado === "final" && p.golesLocal !== undefined) return p;
-  const t = (ahora - Date.parse(p.inicio)) / 60000;
-  if (t < 0) return { ...p, estado: "programado", minuto: undefined };
-  if (t >= 112) {
-    if (!demo) return { ...p, estado: "final", minuto: undefined };
-  }
-  const jugado = t <= 47 ? t : t < 62 ? 45 : Math.min(45 + (t - 62), 95);
-  const minuto =
-    t >= 112 ? undefined : t <= 47 ? (t > 45 ? "45+" : `${Math.floor(t) + 1}'`) : t < 62 ? "Descanso" : jugado > 90 ? "90+" : `${Math.floor(jugado) + 1}'`;
-  const estado: Partido["estado"] = t >= 112 ? "final" : "vivo";
-  if (!demo || p.local.id === "tbd") return { ...p, estado, minuto };
-  const h = hash(p.id);
-  const totalL = [0, 1, 1, 2, 2, 3, 1, 0, 2, 4][h % 10];
-  const totalV = [0, 1, 0, 1, 2, 1, 3, 0, 1, 2][(h >>> 4) % 10];
-  const goles = (cuantos: number, sal: string) =>
-    Array.from({ length: cuantos }, (_, i) => 1 + (hash(`${p.id}${sal}${i}`) % 92)).filter((m) => m <= (t >= 112 ? 99 : jugado)).length;
-  return { ...p, estado, minuto, golesLocal: goles(totalL, "L"), golesVisita: goles(totalV, "V") };
-}
-
-const normal = (s: string) =>
-  s
-    .toLowerCase()
-    .replace(/ø/g, "o")
-    .replace(/æ/g, "ae")
-    .replace(/ß/g, "ss")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\b(fc|cf|ac|ssc|sl|sk|rc|rb|afc|as|vfb)\b/g, "")
-    .replace(/[^a-z0-9]/g, "");
-const mismoEquipo = (a: string, b: string) => {
-  const x = normal(a);
-  const y = normal(b);
-  // Prefijo de 6 letras para "Bayern München"/"Bayern Munich" o "Slavia Praha"/"Slavia Prague", sin confundir a los dos Manchester.
-  return !!x && !!y && (x === y || x.includes(y) || y.includes(x) || (x.slice(0, 6) === y.slice(0, 6) && !x.startsWith("manche")));
-};
 
 /* ────────────────────────────── Utilidades ────────────────────────────── */
 
@@ -433,20 +354,8 @@ const fmtDiaCorto = (d: Date) => ({
   dia: d.getDate(),
   mes: new Intl.DateTimeFormat("es", { month: "short" }).format(d).replace(".", ""),
 });
-const claveDia = (iso: string) => {
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
 const zonaLocal = () => Intl.DateTimeFormat().resolvedOptions().timeZone.replace(/_/g, " ");
 
-function faltan(iso: string, ahora: number): string {
-  const min = Math.round((Date.parse(iso) - ahora) / 60000);
-  if (min < 60) return `en ${min} min`;
-  const h = Math.round(min / 60);
-  if (h < 24) return `en ${h} h`;
-  const d = Math.round(h / 24);
-  return d === 1 ? "mañana" : `en ${d} días`;
-}
 
 function leer<T>(clave: string, porDefecto: T): T {
   try {
@@ -464,42 +373,7 @@ function guardar(clave: string, valor: unknown) {
   }
 }
 
-const aBase64 = (s: string) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const deBase64 = (s: string) => decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/"))));
 
-const fechaGoogle = (d: Date) => d.toISOString().replace(/[-:]|\.\d{3}/g, "");
-
-/* Enlaces cortos: /bayernVsBarcelona4noviembre para un partido y /ChampionsXalapa (su hashtag) para un plan. */
-const APODOS: Record<string, string> = {
-  bay: "Bayern", psg: "PSG", atm: "Atletico", mci: "ManCity", mun: "ManUnited", bvb: "Dortmund", rbl: "Leipzig", psv: "PSV",
-  sha: "Shakhtar", cbr: "Brujas", sla: "Slavia", aek: "AEK", slo: "Slovan", scp: "Sporting", bod: "Bodo", bet: "Betis", lask: "LASK",
-};
-const sinAcentos = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ø/g, "o").replace(/ı/g, "i").replace(/ş/g, "s");
-const apodo = (e: Equipo) => APODOS[e.id] ?? sinAcentos(e.nombre).split(/[^A-Za-z0-9]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join("");
-// La fecha va en hora de Madrid para que el enlace sea el mismo en cualquier país.
-const fechaEnlace = (iso: string) => {
-  const f = new Intl.DateTimeFormat("es", { day: "numeric", month: "long", timeZone: "Europe/Madrid" }).formatToParts(new Date(iso));
-  return (f.find((x) => x.type === "day")?.value ?? "") + sinAcentos(f.find((x) => x.type === "month")?.value ?? "");
-};
-function slugPartido(p: Partido) {
-  const a = apodo(p.local);
-  const inicio = a === a.toUpperCase() ? a.toLowerCase() : a[0].toLowerCase() + a.slice(1);
-  return inicio + "Vs" + apodo(p.visita) + fechaEnlace(p.inicio);
-}
-const ENLACE_CORTO = /^[A-Za-z0-9_]{3,80}$/;
-
-function enlaceGoogleCalendar(titulo: string, inicio: string, lugar: string, detalles: string) {
-  const ini = new Date(inicio);
-  const fin = new Date(ini.getTime() + 2 * 60 * 60 * 1000);
-  const q = new URLSearchParams({
-    action: "TEMPLATE",
-    text: titulo,
-    dates: `${fechaGoogle(ini)}/${fechaGoogle(fin)}`,
-    details: detalles,
-    location: lugar,
-  });
-  return `https://calendar.google.com/calendar/render?${q.toString()}`;
-}
 
 /** Archivo .ics con alarmas 1 día y 1 hora antes: los recordatorios llegan aunque la app esté cerrada. */
 function descargarIcs(titulo: string, inicio: string, lugar: string, detalles: string, alarmas: { dia: boolean; hora: boolean }) {
@@ -532,16 +406,6 @@ function descargarIcs(titulo: string, inicio: string, lugar: string, detalles: s
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-const HASHTAG_OK = /^#[\p{L}\p{N}_]{3,30}$/u;
-const limpiarHashtag = (s: string) => `#${s.replace(/^#+/, "").replace(/[^\p{L}\p{N}_]/gu, "")}`;
-const sugerirHashtag = (ciudad: string, existentes: string[]) => {
-  const base = limpiarHashtag(`Champions${ciudad.replace(/\s+/g, "")}`).slice(0, 28);
-  let tag = base;
-  let i = 2;
-  const usados = new Set(existentes.map((t) => t.toLowerCase()));
-  while (usados.has(tag.toLowerCase())) tag = `${base}${i++}`;
-  return tag;
-};
 
 const EMOJI: Record<TipoLugar, string> = { bar: "🍺", restaurante: "🌮", casa: "🏠" };
 const NOMBRE_TIPO: Record<TipoLugar, string> = { bar: "Bar", restaurante: "Restaurante", casa: "Casa" };
@@ -866,47 +730,6 @@ function TarjetaPartido({
 
 /* ─────────────────────────── Tabla de posiciones ─────────────────────────── */
 
-interface FilaTabla {
-  equipo: Equipo;
-  pos: number;
-  pj: number;
-  g: number;
-  e: number;
-  p: number;
-  gf: number;
-  gc: number;
-  pts: number;
-}
-
-/** Tabla de la fase de liga con los partidos terminados y los que están en juego (cuenta el marcador del momento). */
-function calcularTabla(partidos: Partido[]): FilaTabla[] {
-  const filas = new Map<string, FilaTabla>();
-  const fila = (eq: Equipo) => {
-    let f = filas.get(eq.id);
-    if (!f) filas.set(eq.id, (f = { equipo: eq, pos: 0, pj: 0, g: 0, e: 0, p: 0, gf: 0, gc: 0, pts: 0 }));
-    return f;
-  };
-  for (const m of partidos) {
-    if (m.fase !== "Fase de liga" || m.local.id === "tbd") continue;
-    const l = fila(m.local);
-    const v = fila(m.visita);
-    if (m.estado === "programado" || m.golesLocal === undefined || m.golesVisita === undefined) continue;
-    const a = m.golesLocal;
-    const b = m.golesVisita;
-    l.pj++, v.pj++;
-    l.gf += a, l.gc += b, v.gf += b, v.gc += a;
-    if (a > b) (l.g++, l.pts += 3, v.p++);
-    else if (a < b) (v.g++, v.pts += 3, l.p++);
-    else (l.e++, v.e++, l.pts++, v.pts++);
-  }
-  const orden = [...filas.values()].sort(
-    (x, y) => y.pts - x.pts || y.gf - y.gc - (x.gf - x.gc) || y.gf - x.gf || x.equipo.nombre.localeCompare(y.equipo.nombre, "es"),
-  );
-  orden.forEach((f, i) => (f.pos = i + 1));
-  return orden;
-}
-
-const zonaTabla = (pos: number) => (pos <= 8 ? "octavos" : pos <= 24 ? "playoff" : "fuera");
 const COLOR_ZONA = { octavos: "#2ee6a6", playoff: "#f2c94c", fuera: "#ff4d6d" } as const;
 
 function Posicion({ f }: { f?: FilaTabla }) {
@@ -3437,16 +3260,6 @@ interface FilaMensaje {
 
 type Recordatorios = Record<string, Plan["recordatorios"]>;
 
-// Si la base no tiene la columna `responde`, la cita viaja dentro del texto en una primera línea marcada (invisible).
-const MARCA_CITA = "\u2063";
-const citaEnTexto = (r: Respuesta, texto: string) => `${MARCA_CITA}${r.autor}${MARCA_CITA}${r.texto.replace(/\s+/g, " ").slice(0, 100)}\n${texto}`;
-function leerCitaEnTexto(texto: string): Respuesta | null {
-  if (!texto.startsWith(MARCA_CITA)) return null;
-  const fin = texto.indexOf("\n");
-  const [, autor, cita] = texto.slice(0, fin < 0 ? undefined : fin).split(MARCA_CITA);
-  return autor ? { autor, texto: cita ?? "" } : null;
-}
-const quitarCitaDeTexto = (texto: string) => texto.slice(texto.indexOf("\n") + 1);
 
 /** Lee todo lo compartido y lo arma como planes con sus confirmados y su chat. */
 async function leerNube(recordatorios: Recordatorios): Promise<{ planes: Plan[]; general: Mensaje[] } | null> {
